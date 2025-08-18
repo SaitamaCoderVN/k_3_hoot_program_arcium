@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "solanaMcp": {
+      "command": "npx",
+      "args": [
+        "@modelcontextprotocol/server-solana"
+      ]
+    }
+  }
+}

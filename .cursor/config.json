@@ -1,0 +1,36 @@
+{
+  "name": "Solana Development",
+  "description": "Enhanced Solana development with MCP integration",
+  "version": "1.0.0",
+  "rules": [
+    "Always consider security implications when handling Solana accounts",
+    "Validate all account constraints in Anchor programs",
+    "Use appropriate account types (mut, signer) based on requirements",
+    "Implement proper error handling for all instructions",
+    "Follow Solana best practices for PDA derivation",
+    "Handle transaction confirmation properly in client code",
+    "Use versioned transactions when appropriate",
+    "Consider compute unit optimization for complex operations"
+  ],
+  "contextIncludes": [
+    "programs/**/*.rs",
+    "tests/**/*.ts",
+    "app/**/*.{ts,tsx,js,jsx}",
+    "Anchor.toml",
+    "Cargo.toml",
+    "package.json"
+  ],
+  "contextExcludes": [
+    "node_modules/**",
+    "target/**",
+    ".anchor/**",
+    "dist/**",
+    "build/**"
+  ],
+  "customPrompts": {
+    "anchor-program": "When working with Anchor programs, always validate account constraints, implement proper error handling, and follow security best practices.",
+    "pda-derivation": "For PDA derivation, ensure consistent seed usage, handle bump seeds properly, and validate PDA ownership.",
+    "client-integration": "When building client applications, handle wallet connections gracefully, implement proper transaction confirmation, and provide clear user feedback.",
+    "testing": "Write comprehensive tests covering all instruction paths, error conditions, and edge cases. Use proper test fixtures and mock data."
+  }
+}

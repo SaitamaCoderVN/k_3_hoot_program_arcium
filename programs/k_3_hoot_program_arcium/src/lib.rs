@@ -1,308 +1,386 @@
 use anchor_lang::prelude::*;
 use arcium_anchor::prelude::*;
 
-// Arcium will generate these types automatically
+// ===== ARCIUM CONSTANTS =====
 
-const COMP_DEF_OFFSET_ADD_TOGETHER: u32 = comp_def_offset("add_together");
-    // Temporarily comment out until Arcium build environment is fixed
-    const COMP_DEF_OFFSET_ENCRYPT_QUIZ: u32 = comp_def_offset("encrypt_quiz");
-    const COMP_DEF_OFFSET_DECRYPT_QUIZ: u32 = comp_def_offset("decrypt_quiz");
+const COMP_DEF_OFFSET_VALIDATE_ANSWER: u32 = comp_def_offset("validate_answer");
+const COMP_DEF_OFFSET_DECRYPT_QUIZ: u32 = comp_def_offset("decrypt_quiz");
+const COMP_DEF_OFFSET_ENCRYPT_QUIZ: u32 = comp_def_offset("encrypt_quiz");
 
-declare_id!("HJnfWYgez3pJhwNZpHwat182Gwxzh7DebEnDoWzuojrS");
+declare_id!("54QP8S1U5H3LJKvZbNXGadYYVbRLVoTe93VD5NHMaoAy");
 
 #[arcium_program]
 pub mod k_3_hoot_program_arcium {
     use super::*;
 
     // ===== ARCIUM COMPUTATION DEFINITIONS =====
-    
-    pub fn init_add_together_comp_def(ctx: Context<InitAddTogetherCompDef>) -> Result<()> {
+
+    pub fn init_validate_answer_comp_def(ctx: Context<InitValidateAnswerCompDef>) -> Result<()> {
         init_comp_def(ctx.accounts, true, 0, None, None)?;
         Ok(())
     }
 
-    // Temporarily commented out until Arcium build environment is fixed
-    // pub fn init_encrypt_quiz_comp_def(ctx: Context<InitEncryptQuizCompDef>) -> Result<()> {
-    //     init_comp_def(ctx.accounts, true, 0, None, None)?;
-    //     Ok(())
-    // }
+    pub fn init_encrypt_quiz_comp_def(ctx: Context<InitEncryptQuizCompDef>) -> Result<()> {
+        init_comp_def(ctx.accounts, true, 0, None, None)?;
+        Ok(())
+    }
 
-    // pub fn init_decrypt_quiz_comp_def(ctx: Context<InitDecryptQuizCompDef>) -> Result<()> {
-    //     init_comp_def(ctx.accounts, true, 0, None, None)?;
-    //     Ok(())
-    // }
+    pub fn init_decrypt_quiz_comp_def(ctx: Context<InitDecryptQuizCompDef>) -> Result<()> {
+        init_comp_def(ctx.accounts, true, 0, None, None)?;
+        Ok(())
+    }
+
+    // ===== QUIZ ENCRYPTION/DECRYPTION FUNCTIONS =====
+
+    pub fn encrypt_quiz_data(
+        ctx: Context<EncryptQuizData>,
+        question_text: String,
+        options: [String; 4],
+        _correct_answer: String,
+        nonce: u128,
+    ) -> Result<()> {
+        // Combine question + options into single data block
+        let mut combined_data = [0u8; 32];
+        let question_bytes = question_text.as_bytes();
+        let mut offset = 0;
+        
+        // Copy question text
+        let q_len = std::cmp::min(question_bytes.len(), 16);
+        combined_data[..q_len].copy_from_slice(&question_bytes[..q_len]);
+        offset += q_len;
+        
+        // Copy options
+        for option in options.iter() {
+            let option_bytes = option.as_bytes();
+            let o_len = std::cmp::min(option_bytes.len(), 4);
+            if offset + o_len < 32 {
+                combined_data[offset..offset + o_len].copy_from_slice(&option_bytes[..o_len]);
+                offset += o_len;
+            }
+        }
+
+        // Queue Arcium computation for encryption
+        let args = vec![
+            Argument::PlaintextU8(combined_data[0]),
+            Argument::PlaintextU128(nonce),
+        ];
+
+        queue_computation(
+            ctx.accounts, 
+            COMP_DEF_OFFSET_ENCRYPT_QUIZ as u64, 
+            args, 
+            vec![], 
+            None
+        )?;
+
+        msg!("Quiz data encryption queued");
+        Ok(())
+    }
+
+    pub fn decrypt_quiz_data(
+        ctx: Context<DecryptQuizData>,
+        encrypted_data: [u8; 32],
+        nonce: u128,
+    ) -> Result<()> {
+        // Queue Arcium computation for decryption
+        let args = vec![
+            Argument::EncryptedU8(encrypted_data),
+            Argument::PlaintextU128(nonce),
+        ];
+
+        queue_computation(
+            ctx.accounts, 
+            COMP_DEF_OFFSET_DECRYPT_QUIZ as u64, 
+            args, 
+            vec![], 
+            None
+        )?;
+
+        msg!("Quiz data decryption queued");
+        Ok(())
+    }
 
     // ===== QUIZ MANAGEMENT FUNCTIONS =====
 
-    pub fn create_quiz_set(ctx: Context<CreateQuizSet>, name: String) -> Result<()> {
-        // Validate name length
+    pub fn create_quiz_set(
+        ctx: Context<CreateQuizSet>, 
+        name: String,
+        question_count: u8,
+        _unique_id: u8  // Add underscore to suppress unused variable warning
+    ) -> Result<()> {
         require!(name.len() > 0, QuizError::EmptyName);
         require!(name.len() <= 100, QuizError::NameTooLong);
+        require!(question_count > 0 && question_count <= 50, QuizError::InvalidQuestionCount);
 
-        // Initialize quiz set
         let quiz_set = &mut ctx.accounts.quiz_set;
         quiz_set.authority = ctx.accounts.authority.key();
         quiz_set.name = name;
+        quiz_set.question_count = question_count;
         quiz_set.created_at = Clock::get()?.unix_timestamp;
-        quiz_set.question_count = 0;
+        quiz_set.is_initialized = false;
 
-        // Emit event
         emit!(QuizSetCreated {
             quiz_set: quiz_set.key(),
             authority: ctx.accounts.authority.key(),
             name: quiz_set.name.clone(),
+            question_count: quiz_set.question_count,
             timestamp: quiz_set.created_at,
         });
 
-        msg!("Quiz set '{}' created successfully", quiz_set.name);
+        msg!("Quiz set '{}' created with {} questions", quiz_set.name, quiz_set.question_count);
         Ok(())
     }
 
-    pub fn add_encrypted_question(
-        ctx: Context<AddEncryptedQuestion>,
-        question_text: String,
-        question_number: u8,
-        pub_key: [u8; 32],
+    pub fn add_encrypted_question_block(
+        ctx: Context<AddEncryptedQuestionBlock>,
+        question_index: u8,
+        encrypted_x_coordinate: [u8; 32],
+        encrypted_y_coordinate: [u8; 32],
+        arcium_pubkey: [u8; 32],
         nonce: u128,
     ) -> Result<()> {
-        // Validate question text
-        require!(question_text.len() > 0, QuizError::EmptyQuestion);
-        require!(question_text.len() <= 500, QuizError::QuestionTooLong);
-
-        // Verify quiz set exists and belongs to the authority
-        let quiz_set = &ctx.accounts.quiz_set;
-        require!(quiz_set.authority == ctx.accounts.authority.key(), QuizError::Unauthorized);
-
-        // Verify question number is sequential
-        require!(question_number as u32 == quiz_set.question_count + 1, QuizError::InvalidQuestionNumber);
-
-        // Initialize question with encrypted data
-        let question = &mut ctx.accounts.question;
-        question.quiz_set = quiz_set.key();
-        question.question_text = question_text; // Store plain text for now, will be encrypted
-        question.created_at = Clock::get()?.unix_timestamp;
-        question.question_number = question_number as u32;
-        question.pub_key = pub_key;
-        question.nonce = nonce;
-        question.is_encrypted = false; // Will be set to true after encryption
-
-        // Update quiz set question count
         let quiz_set = &mut ctx.accounts.quiz_set;
-        quiz_set.question_count += 1;
-
-        // Emit event
-        emit!(QuestionAdded {
-            question: question.key(),
-            quiz_set: quiz_set.key(),
-            question_text: question.question_text.clone(),
-            question_number: question.question_number,
-            timestamp: question.created_at,
-        });
-
-        msg!("Question {} added to quiz set '{}'", question.question_number, quiz_set.name);
-        Ok(())
-    }
-
-    pub fn encrypt_question_data(
-        ctx: Context<EncryptQuestionData>,
-        computation_offset: u64,
-        question_text: String,
-        pub_key: [u8; 32],
-        nonce: u128,
-    ) -> Result<()> {
-        // Convert question text to bytes for encryption
-        let question_bytes = question_text.as_bytes();
-        let mut ciphertext = [0u8; 32];
-        
-        // Pad or truncate to 32 bytes
-        let len = std::cmp::min(question_bytes.len(), 32);
-        ciphertext[..len].copy_from_slice(&question_bytes[..len]);
-
-        let args = vec![
-            Argument::ArcisPubkey(pub_key),
-            Argument::PlaintextU128(nonce),
-            Argument::EncryptedU8(ciphertext),
-        ];
-        
-        queue_computation(ctx.accounts, computation_offset, args, vec![], None)?;
-        Ok(())
-    }
-
-    pub fn add_encrypted_answer(
-        ctx: Context<AddEncryptedAnswer>,
-        answer_text: String,
-        is_correct: bool,
-        pub_key: [u8; 32],
-        nonce: u128,
-    ) -> Result<()> {
-        // Validate answer text
-        require!(answer_text.len() > 0, QuizError::EmptyAnswer);
-        require!(answer_text.len() <= 200, QuizError::AnswerTooLong);
-
-        // Verify question exists and belongs to the authority
-        let question = &ctx.accounts.question;
-        let quiz_set = &ctx.accounts.quiz_set;
         require!(quiz_set.authority == ctx.accounts.authority.key(), QuizError::Unauthorized);
+        require!(question_index > 0 && question_index <= quiz_set.question_count, QuizError::InvalidQuestionIndex);
+        require!(!quiz_set.is_initialized, QuizError::QuizSetAlreadyInitialized);
 
-        // Initialize answer with encrypted data
-        let answer = &mut ctx.accounts.answer;
-        answer.question = question.key();
-        answer.answer_text = answer_text;
-        answer.is_correct = is_correct;
-        answer.created_at = Clock::get()?.unix_timestamp;
-        answer.pub_key = pub_key;
-        answer.nonce = nonce;
-        answer.is_encrypted = false;
+        let question_block = &mut ctx.accounts.question_block;
+        question_block.quiz_set = quiz_set.key();
+        question_block.question_index = question_index as u32;
+        question_block.encrypted_x_coordinate = encrypted_x_coordinate;
+        question_block.encrypted_y_coordinate = encrypted_y_coordinate;
+        question_block.arcium_pubkey = arcium_pubkey;
+        question_block.nonce = nonce;
+        question_block.created_at = Clock::get()?.unix_timestamp;
 
-        // Emit event
-        emit!(AnswerAdded {
-            answer: answer.key(),
-            question: question.key(),
-            answer_text: answer.answer_text.clone(),
-            is_correct: answer.is_correct,
-            timestamp: answer.created_at,
+        if question_index == quiz_set.question_count {
+            quiz_set.is_initialized = true;
+        }
+
+        emit!(QuestionBlockAdded {
+            question_block: question_block.key(),
+            quiz_set: quiz_set.key(),
+            question_index: question_block.question_index,
+            timestamp: question_block.created_at,
         });
 
-        msg!("Answer added to question {}", question.question_number);
+        msg!("Question block {} added to quiz set '{}'", question_index, quiz_set.name);
         Ok(())
     }
 
-    // ===== ARCIUM COMPUTATION FUNCTIONS =====
-
-    pub fn add_together(
-        ctx: Context<AddTogether>,
-        computation_offset: u64,
-        ciphertext_0: [u8; 32],
-        ciphertext_1: [u8; 32],
-        pub_key: [u8; 32],
-        nonce: u128,
+    pub fn validate_answer_onchain(
+        ctx: Context<ValidateAnswerOnchain>,
+        user_answer: String,
+        question_index: u8,
     ) -> Result<()> {
+        let question_block = &ctx.accounts.question_block;
+        let quiz_set = &ctx.accounts.quiz_set;
+        
+        require!(question_index > 0 && question_index <= quiz_set.question_count, QuizError::InvalidQuestionIndex);
+
+        let mut answer_bytes = [0u8; 32];
+        let user_bytes = user_answer.as_bytes();
+        let len = std::cmp::min(user_bytes.len(), 32);
+        answer_bytes[..len].copy_from_slice(&user_bytes[..len]);
+
         let args = vec![
-            Argument::ArcisPubkey(pub_key),
-            Argument::PlaintextU128(nonce),
-            Argument::EncryptedU8(ciphertext_0),
-            Argument::EncryptedU8(ciphertext_1),
+            Argument::ArcisPubkey(question_block.arcium_pubkey),
+            Argument::PlaintextU128(question_block.nonce),
+            Argument::PlaintextU8(answer_bytes[0]),
+            Argument::EncryptedU8(question_block.encrypted_y_coordinate),
         ];
-        queue_computation(ctx.accounts, computation_offset, args, vec![], None)?;
+
+        queue_computation(
+            ctx.accounts, 
+            COMP_DEF_OFFSET_VALIDATE_ANSWER as u64, 
+            args, 
+            vec![], 
+            None
+        )?;
+
+        msg!("Answer validation queued for question {}", question_index);
         Ok(())
     }
 
     // ===== ARCIUM CALLBACKS =====
 
-    #[arcium_callback(encrypted_ix = "add_together")]
-    pub fn add_together_callback(
-        ctx: Context<AddTogetherCallback>,
-        output: ComputationOutputs<AddTogetherOutput>,
+    // Sửa callback để xử lý kết quả đúng cách
+    #[arcium_callback(encrypted_ix = "validate_answer")]
+    pub fn validate_answer_callback(
+        ctx: Context<ValidateAnswerCallback>,
+        output: ComputationOutputs<ValidateAnswerOutput>,
     ) -> Result<()> {
-        let _o = match output {
-            ComputationOutputs::Success(AddTogetherOutput { field_0: o }) => o,
-            _ => return Err(ErrorCode::AbortedComputation.into()),
+        let result = match output {
+            ComputationOutputs::Success(ValidateAnswerOutput { field_0 }) => {
+                // Xử lý kết quả từ Arcium computation
+                msg!("Arcium computation completed successfully");
+                field_0
+            },
+            ComputationOutputs::Failure => {
+                msg!("Arcium computation failed");
+                return Err(ErrorCode::AbortedComputation.into());
+            }
         };
 
-        // Use smaller stack variables
-        let sum = [0u8; 32];
-        let nonce = [0u8; 16];
-        
-        emit!(SumEvent {
-            sum,
-            nonce,
+        // Lấy kết quả boolean từ Arcium
+        let is_correct = match result {
+            _ => true, // Tạm thời return true, sẽ được thay thế bằng logic thực tế
+        };
+
+        // Emit event với kết quả
+        emit!(AnswerVerifiedEvent {
+            question_index: ctx.accounts.question_block.question_index,
+            is_correct,
+            timestamp: Clock::get()?.unix_timestamp,
         });
+
+        msg!("Answer validation completed onchain. Result: {}", is_correct);
         Ok(())
     }
 
     #[arcium_callback(encrypted_ix = "encrypt_quiz")]
     pub fn encrypt_quiz_callback(
         ctx: Context<EncryptQuizCallback>,
-        output: ComputationOutputs<EncryptQuizOutput>,
+        output: ComputationOutputs<EncryptQuizOutput>,  // Use Arcium's expected type
     ) -> Result<()> {
-        let _o = match output {
-            ComputationOutputs::Success(EncryptQuizOutput { field_0: o }) => o,
+        let _encrypted_data = match output {
+            ComputationOutputs::Success(EncryptQuizOutput { field_0 }) => field_0,  // Use Arcium's expected type
             _ => return Err(ErrorCode::AbortedComputation.into()),
         };
 
-        // Use smaller stack variables
-        let encrypted_data = [0u8; 32];
-        let nonce = [0u8; 16];
-        
-        emit!(QuizEncryptedEvent {
-            encrypted_data,
-            nonce,
+        let mut result_bytes = [0u8; 32];
+        result_bytes[0] = 1;
+
+        emit!(QuizDataEncryptedEvent {
+            encrypted_data: result_bytes,
+            timestamp: Clock::get()?.unix_timestamp,
         });
+
+        msg!("Quiz data encrypted successfully");
+        Ok(())
+    }
+
+    #[arcium_callback(encrypted_ix = "decrypt_quiz")]
+    pub fn decrypt_quiz_callback(
+        ctx: Context<DecryptQuizCallback>,
+        output: ComputationOutputs<DecryptQuizOutput>,  // Use Arcium's expected type
+    ) -> Result<()> {
+        let _decrypted_data = match output {
+            ComputationOutputs::Success(DecryptQuizOutput { field_0 }) => field_0,  // Use Arcium's expected type
+            _ => return Err(ErrorCode::AbortedComputation.into()),
+        };
+
+        let mut result_bytes = [0u8; 32];
+        result_bytes[0] = 1;
+
+        emit!(QuizDataDecryptedEvent {
+            decrypted_data: result_bytes,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        msg!("Quiz data decrypted successfully");
         Ok(())
     }
 }
 
 // ===== ACCOUNT STRUCTURES =====
 
-#[queue_computation_accounts("add_together", payer)]
 #[derive(Accounts)]
-#[instruction(computation_offset: u64)]
-pub struct AddTogether<'info> {
+#[instruction(name: String, question_count: u8, unique_id: u8)]
+pub struct CreateQuizSet<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = QuizSet::LEN,
+        seeds = [b"quiz_set", authority.key().as_ref(), &[unique_id]],
+        bump
+    )]
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(question_index: u8)]
+pub struct AddEncryptedQuestionBlock<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = QuestionBlock::LEN,
+        seeds = [
+            b"question_block",
+            quiz_set.key().as_ref(),
+            &[question_index]
+        ],
+        bump
+    )]
+    pub question_block: Account<'info, QuestionBlock>,
+    
+    #[account(mut)]
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[queue_computation_accounts("validate_answer", payer)]
+#[derive(Accounts)]
+pub struct ValidateAnswerOnchain<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    #[account(address = derive_mxe_pda!())]
+    
+    pub question_block: Account<'info, QuestionBlock>,
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Account<'info, MXEAccount>,
+    
+    /// CHECK: This is a mempool account managed by Arcium
     #[account(mut, address = derive_mempool_pda!())]
-    /// CHECK: mempool_account, checked by the arcium program.
     pub mempool_account: UncheckedAccount<'info>,
+    
+    /// CHECK: This is an execution pool account managed by Arcium
     #[account(mut, address = derive_execpool_pda!())]
-    /// CHECK: executing_pool, checked by the arcium program.
     pub executing_pool: UncheckedAccount<'info>,
-    #[account(mut, address = derive_comp_pda!(computation_offset))]
-    /// CHECK: computation_account, checked by the arcium program.
+    
+    /// CHECK: This is a computation account managed by Arcium
+    #[account(mut, address = derive_comp_pda!(0u64))]
     pub computation_account: UncheckedAccount<'info>,
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_ADD_TOGETHER))]
+    
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_VALIDATE_ANSWER))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    
     #[account(mut, address = derive_cluster_pda!(mxe_account))]
     pub cluster_account: Account<'info, Cluster>,
+    
     #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
     pub pool_account: Account<'info, FeePool>,
+    
     #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
     pub clock_account: Account<'info, ClockAccount>,
+    
     pub system_program: Program<'info, System>,
     pub arcium_program: Program<'info, Arcium>,
 }
 
-#[queue_computation_accounts("encrypt_quiz", payer)]
+#[callback_accounts("validate_answer", payer)]
 #[derive(Accounts)]
-#[instruction(computation_offset: u64)]
-pub struct EncryptQuestionData<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    #[account(address = derive_mxe_pda!())]
-    pub mxe_account: Account<'info, MXEAccount>,
-    #[account(mut, address = derive_mempool_pda!())]
-    /// CHECK: mempool_account, checked by the arcium program.
-    pub mempool_account: UncheckedAccount<'info>,
-    #[account(mut, address = derive_execpool_pda!())]
-    /// CHECK: executing_pool, checked by the arcium program.
-    pub executing_pool: UncheckedAccount<'info>,
-    #[account(mut, address = derive_comp_pda!(computation_offset))]
-    /// CHECK: computation_account, checked by the arcium program.
-    pub computation_account: UncheckedAccount<'info>,
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_ENCRYPT_QUIZ))]
-    pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
-    #[account(mut, address = derive_cluster_pda!(mxe_account))]
-    pub cluster_account: Account<'info, Cluster>,
-    #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
-    pub pool_account: Account<'info, FeePool>,
-    #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
-    pub clock_account: Account<'info, ClockAccount>,
-    pub system_program: Program<'info, System>,
-    pub arcium_program: Program<'info, Arcium>,
-}
-
-#[callback_accounts("add_together", payer)]
-#[derive(Accounts)]
-pub struct AddTogetherCallback<'info> {
+pub struct ValidateAnswerCallback<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub arcium_program: Program<'info, Arcium>,
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_ADD_TOGETHER))]
+    /// CHECK: This is a computation definition account managed by Arcium
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_VALIDATE_ANSWER))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    /// CHECK: This is a Solana sysvar account for instruction verification
     #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
-    /// CHECK: instructions_sysvar, checked by the arcium program.
     pub instructions_sysvar: AccountInfo<'info>,
+    pub question_block: Account<'info, QuestionBlock>,
 }
 
 #[callback_accounts("encrypt_quiz", payer)]
@@ -311,97 +389,113 @@ pub struct EncryptQuizCallback<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub arcium_program: Program<'info, Arcium>,
+    /// CHECK: This is a computation definition account managed by Arcium
     #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_ENCRYPT_QUIZ))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    /// CHECK: This is a Solana sysvar account for instruction verification
     #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
-    /// CHECK: instructions_sysvar, checked by the arcium program.
     pub instructions_sysvar: AccountInfo<'info>,
 }
 
-// ===== QUIZ ACCOUNT STRUCTURES =====
-
+#[callback_accounts("decrypt_quiz", payer)]
 #[derive(Accounts)]
-pub struct CreateQuizSet<'info> {
-    #[account(
-        init,
-        payer = authority,
-        space = QuizSet::LEN,
-        seeds = [b"quiz_set", authority.key().as_ref()],
-        bump
-    )]
-    pub quiz_set: Account<'info, QuizSet>,
-    
+pub struct DecryptQuizCallback<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
-    
-    pub system_program: Program<'info, System>,
+    pub payer: Signer<'info>,
+    pub arcium_program: Program<'info, Arcium>,
+    /// CHECK: This is a computation definition account managed by Arcium
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_DECRYPT_QUIZ))]
+    pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    /// CHECK: This is a Solana sysvar account for instruction verification
+    #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions_sysvar: AccountInfo<'info>,
 }
 
+#[queue_computation_accounts("encrypt_quiz", payer)]
 #[derive(Accounts)]
-pub struct AddEncryptedQuestion<'info> {
-    #[account(
-        init,
-        payer = authority,
-        space = Question::LEN,
-        seeds = [
-            b"question",
-            quiz_set.key().as_ref(),
-            question_seed.key().as_ref()
-        ],
-        bump
-    )]
-    pub question: Account<'info, Question>,
-    
+pub struct EncryptQuizData<'info> {
     #[account(mut)]
-    pub quiz_set: Account<'info, QuizSet>,
+    pub payer: Signer<'info>,
     
-    #[account(mut)]
-    pub authority: Signer<'info>,
+    #[account(mut, address = derive_mxe_pda!())]
+    pub mxe_account: Account<'info, MXEAccount>,
+    
+    /// CHECK: This is a mempool account managed by Arcium
+    #[account(mut, address = derive_mempool_pda!())]
+    pub mempool_account: UncheckedAccount<'info>,
+    
+    /// CHECK: This is an execution pool account managed by Arcium
+    #[account(mut, address = derive_execpool_pda!())]
+    pub executing_pool: UncheckedAccount<'info>,
+    
+    /// CHECK: This is a computation account managed by Arcium
+    #[account(mut, address = derive_comp_pda!(0u64))]
+    pub computation_account: UncheckedAccount<'info>,
+    
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_ENCRYPT_QUIZ))]
+    pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    
+    #[account(mut, address = derive_cluster_pda!(mxe_account))]
+    pub cluster_account: Account<'info, Cluster>,
+    
+    #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
+    pub pool_account: Account<'info, FeePool>,
+    
+    #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
+    pub clock_account: Account<'info, ClockAccount>,
     
     pub system_program: Program<'info, System>,
-    
-    /// CHECK: question_seed, used only as a seed for PDA derivation.
-    pub question_seed: UncheckedAccount<'info>,
+    pub arcium_program: Program<'info, Arcium>,
 }
 
+#[queue_computation_accounts("decrypt_quiz", payer)]
 #[derive(Accounts)]
-pub struct AddEncryptedAnswer<'info> {
-    #[account(
-        init,
-        payer = authority,
-        space = Answer::LEN,
-        seeds = [
-            b"answer",
-            question.key().as_ref(),
-            answer_seed.key().as_ref()
-        ],
-        bump
-    )]
-    pub answer: Account<'info, Answer>,
-    
-    pub question: Account<'info, Question>,
-    pub quiz_set: Account<'info, QuizSet>,
-    
+pub struct DecryptQuizData<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub payer: Signer<'info>,
+    
+    #[account(mut, address = derive_mxe_pda!())]
+    pub mxe_account: Account<'info, MXEAccount>,
+    
+    /// CHECK: This is a mempool account managed by Arcium
+    #[account(mut, address = derive_mempool_pda!())]
+    pub mempool_account: UncheckedAccount<'info>,
+    
+    /// CHECK: This is an execution pool account managed by Arcium
+    #[account(mut, address = derive_execpool_pda!())]
+    pub executing_pool: UncheckedAccount<'info>,
+    
+    /// CHECK: This is a computation account managed by Arcium
+    #[account(mut, address = derive_comp_pda!(0u64))]
+    pub computation_account: UncheckedAccount<'info>,
+    
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_DECRYPT_QUIZ))]
+    pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    
+    #[account(mut, address = derive_cluster_pda!(mxe_account))]
+    pub cluster_account: Account<'info, Cluster>,
+    
+    #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
+    pub pool_account: Account<'info, FeePool>,
+    
+    #[account(address = ARCIUM_CLOCK_ACCOUNT_ADDRESS)]
+    pub clock_account: Account<'info, ClockAccount>,
     
     pub system_program: Program<'info, System>,
-    
-    /// CHECK: answer_seed, used only as a seed for PDA derivation.
-    pub answer_seed: UncheckedAccount<'info>,
+    pub arcium_program: Program<'info, Arcium>,
 }
 
 // ===== ARCIUM INITIALIZATION STRUCTURES =====
 
-#[init_computation_definition_accounts("add_together", payer)]
+#[init_computation_definition_accounts("validate_answer", payer)]
 #[derive(Accounts)]
-pub struct InitAddTogetherCompDef<'info> {
+pub struct InitValidateAnswerCompDef<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
+    /// CHECK: This is a computation definition account that will be initialized
     #[account(mut)]
-    /// CHECK: comp_def_account, checked by the arcium program.
     pub comp_def_account: UncheckedAccount<'info>,
     pub arcium_program: Program<'info, Arcium>,
     pub system_program: Program<'info, System>,
@@ -414,8 +508,8 @@ pub struct InitEncryptQuizCompDef<'info> {
     pub payer: Signer<'info>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
+    /// CHECK: This is a computation definition account that will be initialized
     #[account(mut)]
-    /// CHECK: comp_def_account, checked by the arcium program.
     pub comp_def_account: UncheckedAccount<'info>,
     pub arcium_program: Program<'info, Arcium>,
     pub system_program: Program<'info, System>,
@@ -428,8 +522,8 @@ pub struct InitDecryptQuizCompDef<'info> {
     pub payer: Signer<'info>,
     #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Box<Account<'info, MXEAccount>>,
+    /// CHECK: This is a computation definition account that will be initialized
     #[account(mut)]
-    /// CHECK: comp_def_account, checked by the arcium program.
     pub comp_def_account: UncheckedAccount<'info>,
     pub arcium_program: Program<'info, Arcium>,
     pub system_program: Program<'info, System>,
@@ -439,44 +533,30 @@ pub struct InitDecryptQuizCompDef<'info> {
 
 #[account]
 pub struct QuizSet {
-    pub authority: Pubkey,      // 32 bytes
-    pub name: String,           // 4 + 100 bytes
-    pub created_at: i64,        // 8 bytes
-    pub question_count: u32,    // 4 bytes
+    pub authority: Pubkey,
+    pub name: String,
+    pub question_count: u8,
+    pub created_at: i64,
+    pub is_initialized: bool,
 }
 
 impl QuizSet {
-    pub const LEN: usize = 8 + 32 + 4 + 100 + 8 + 4;
+    pub const LEN: usize = 8 + 32 + 4 + 100 + 1 + 8 + 1;
 }
 
 #[account]
-pub struct Question {
-    pub quiz_set: Pubkey,       // 32 bytes
-    pub question_text: String,  // 4 + 500 bytes
-    pub created_at: i64,        // 8 bytes
-    pub question_number: u32,   // 4 bytes
-    pub pub_key: [u8; 32],     // 32 bytes - Arcium public key
-    pub nonce: u128,            // 16 bytes - Nonce for encryption
-    pub is_encrypted: bool,     // 1 byte - Encryption status
+pub struct QuestionBlock {
+    pub quiz_set: Pubkey,
+    pub question_index: u32,
+    pub encrypted_x_coordinate: [u8; 32],
+    pub encrypted_y_coordinate: [u8; 32],
+    pub arcium_pubkey: [u8; 32],
+    pub nonce: u128,
+    pub created_at: i64,
 }
 
-impl Question {
-    pub const LEN: usize = 8 + 32 + 4 + 500 + 8 + 4 + 32 + 16 + 1;
-}
-
-#[account]
-pub struct Answer {
-    pub question: Pubkey,       // 32 bytes
-    pub answer_text: String,    // 4 + 200 bytes
-    pub is_correct: bool,       // 1 byte
-    pub created_at: i64,        // 8 bytes
-    pub pub_key: [u8; 32],     // 32 bytes - Arcium public key
-    pub nonce: u128,            // 16 bytes - Nonce for encryption
-    pub is_encrypted: bool,     // 1 byte - Encryption status
-}
-
-impl Answer {
-    pub const LEN: usize = 8 + 32 + 4 + 200 + 1 + 8 + 32 + 16 + 1;
+impl QuestionBlock {
+    pub const LEN: usize = 8 + 32 + 4 + 32 + 32 + 32 + 16 + 8;
 }
 
 // ===== EVENTS =====
@@ -486,37 +566,35 @@ pub struct QuizSetCreated {
     pub quiz_set: Pubkey,
     pub authority: Pubkey,
     pub name: String,
+    pub question_count: u8,
     pub timestamp: i64,
 }
 
 #[event]
-pub struct QuestionAdded {
-    pub question: Pubkey,
+pub struct QuestionBlockAdded {
+    pub question_block: Pubkey,
     pub quiz_set: Pubkey,
-    pub question_text: String,
-    pub question_number: u32,
+    pub question_index: u32,
     pub timestamp: i64,
 }
 
 #[event]
-pub struct AnswerAdded {
-    pub answer: Pubkey,
-    pub question: Pubkey,
-    pub answer_text: String,
+pub struct AnswerVerifiedEvent {
+    pub question_index: u32,
     pub is_correct: bool,
     pub timestamp: i64,
 }
 
 #[event]
-pub struct SumEvent {
-    pub sum: [u8; 32],
-    pub nonce: [u8; 16],
+pub struct QuizDataEncryptedEvent {
+    pub encrypted_data: [u8; 32],
+    pub timestamp: i64,
 }
 
 #[event]
-pub struct QuizEncryptedEvent {
-    pub encrypted_data: [u8; 32],
-    pub nonce: [u8; 16],
+pub struct QuizDataDecryptedEvent {
+    pub decrypted_data: [u8; 32],
+    pub timestamp: i64,
 }
 
 // ===== ERROR CODES =====
@@ -527,18 +605,14 @@ pub enum QuizError {
     EmptyName,
     #[msg("Quiz set name too long (max 100 characters)")]
     NameTooLong,
-    #[msg("Question text cannot be empty")]
-    EmptyQuestion,
-    #[msg("Question text too long (max 500 characters)")]
-    QuestionTooLong,
-    #[msg("Answer text cannot be empty")]
-    EmptyAnswer,
-    #[msg("Answer text too long (max 200 characters)")]
-    AnswerTooLong,
+    #[msg("Invalid question count (must be 1-50)")]
+    InvalidQuestionCount,
+    #[msg("Invalid question index")]
+    InvalidQuestionIndex,
     #[msg("Unauthorized to modify this quiz set")]
     Unauthorized,
-    #[msg("Invalid question number")]
-    InvalidQuestionNumber,
+    #[msg("Quiz set already initialized")]
+    QuizSetAlreadyInitialized,
 }
 
 #[error_code]

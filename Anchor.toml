@@ -5,8 +5,11 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
+[programs.devnet]
+k_3_hoot_program_arcium = "54QP8S1U5H3LJKvZbNXGadYYVbRLVoTe93VD5NHMaoAy"
+
 [programs.localnet]
-k_3_hoot_program_arcium = "HJnfWYgez3pJhwNZpHwat182Gwxzh7DebEnDoWzuojrS"
+k_3_hoot_program_arcium = "54QP8S1U5H3LJKvZbNXGadYYVbRLVoTe93VD5NHMaoAy"
 
 [registry]
 url = "https://api.apr.dev"

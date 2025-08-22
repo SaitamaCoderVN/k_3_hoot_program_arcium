@@ -4,24 +4,11 @@ use arcis_imports::*;
 mod circuits {
     use arcis_imports::*;
 
-    // ===== ADD TOGETHER CIRCUIT =====
-    
-    pub struct InputValues {
-        v1: u8,
-        v2: u8,
-    }
-
-    #[instruction]
-    pub fn add_together(input_ctxt: Enc<Shared, InputValues>) -> Enc<Shared, u16> {
-        let input = input_ctxt.to_arcis();
-        let sum = input.v1 as u16 + input.v2 as u16;
-        input_ctxt.owner.from_arcis(sum)
-    }
-
     // ===== QUIZ ENCRYPTION CIRCUIT =====
+    // Encrypt question + 4 choices (x-coordinate)
     
     pub struct QuizEncryptInput {
-        question_text: [u8; 32],  // Padded question text
+        question_text: [u8; 32],  // Question + 4 choices
         nonce: u128,
     }
 
@@ -29,7 +16,7 @@ mod circuits {
     pub fn encrypt_quiz(input_ctxt: Enc<Shared, QuizEncryptInput>) -> Enc<Shared, [u8; 32]> {
         let input = input_ctxt.to_arcis();
         
-        // Simple encryption: Add nonce bytes
+        // Encryption: Add with nonce
         let mut encrypted = [0u8; 32];
         let nonce_bytes = input.nonce.to_le_bytes();
         
@@ -41,6 +28,7 @@ mod circuits {
     }
 
     // ===== QUIZ DECRYPTION CIRCUIT =====
+    // Decrypt question + 4 choices (x-coordinate)
     
     pub struct QuizDecryptInput {
         encrypted_data: [u8; 32],
@@ -51,7 +39,7 @@ mod circuits {
     pub fn decrypt_quiz(input_ctxt: Enc<Shared, QuizDecryptInput>) -> Enc<Shared, [u8; 32]> {
         let input = input_ctxt.to_arcis();
         
-        // Simple decryption: Subtract nonce bytes
+        // Decryption: Subtract with nonce
         let mut decrypted = [0u8; 32];
         let nonce_bytes = input.nonce.to_le_bytes();
         
@@ -63,10 +51,11 @@ mod circuits {
     }
 
     // ===== ANSWER VALIDATION CIRCUIT =====
+    // Compare user answer with correct answer (y-coordinate)
     
     pub struct AnswerValidationInput {
-        user_answer: [u8; 32],
-        correct_answer: [u8; 32],
+        user_answer: [u8; 32],      // User answer
+        correct_answer: [u8; 32],   // Correct answer encrypted
         nonce: u128,
     }
 
@@ -74,10 +63,21 @@ mod circuits {
     pub fn validate_answer(input_ctxt: Enc<Shared, AnswerValidationInput>) -> Enc<Shared, bool> {
         let input = input_ctxt.to_arcis();
         
-        // Compare encrypted answers without revealing the actual answers
+        // Compare user answer with correct answer
+        // Use nonce to decrypt the correct answer before comparing
         let mut is_correct = true;
+        
+        // Decrypt correct answer using nonce
+        let mut decrypted_correct = [0u8; 32];
+        let nonce_bytes = input.nonce.to_le_bytes();
+        
         for i in 0..32 {
-            if input.user_answer[i] != input.correct_answer[i] {
+            decrypted_correct[i] = input.correct_answer[i] - nonce_bytes[i % 16];
+        }
+        
+        // Compare user answer with decrypted correct answer
+        for i in 0..32 {
+            if input.user_answer[i] != decrypted_correct[i] {
                 is_correct = false;
             }
         }

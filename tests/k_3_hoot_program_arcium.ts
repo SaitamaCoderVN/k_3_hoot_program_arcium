@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { K3HootProgramArcium } from "../target/types/k_3_hoot_program_arcium";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
 import { expect } from "chai";
-import BN from "bn.js";
+import { BN } from "@coral-xyz/anchor";
 
 describe("k_3_hoot_program_arcium", () => {
   const provider = anchor.AnchorProvider.env();
@@ -13,14 +13,8 @@ describe("k_3_hoot_program_arcium", () => {
   
   // Test accounts
   const authority = Keypair.generate();
-  const quizSetSeed = Keypair.generate();
-  const questionSeed = Keypair.generate();
-  const answerSeed = Keypair.generate();
-  
-  // Store PDAs for reuse
   let quizSetPda: PublicKey;
-  let questionPda: PublicKey;
-  let answerPda: PublicKey;
+  let questionBlockPda: PublicKey;
 
   before(async () => {
     // Airdrop SOL to authority
@@ -33,20 +27,11 @@ describe("k_3_hoot_program_arcium", () => {
       program.programId
     )[0];
     
-    questionPda = PublicKey.findProgramAddressSync(
+    questionBlockPda = PublicKey.findProgramAddressSync(
       [
-        Buffer.from("question"),
+        Buffer.from("question_block"),
         quizSetPda.toBuffer(),
-        questionSeed.publicKey.toBuffer()
-      ],
-      program.programId
-    )[0];
-    
-    answerPda = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("answer"),
-        questionPda.toBuffer(),
-        answerSeed.publicKey.toBuffer()
+        Buffer.from([1])
       ],
       program.programId
     )[0];
@@ -56,7 +41,7 @@ describe("k_3_hoot_program_arcium", () => {
     it("Should create a quiz set", async () => {
       try {
         await program.methods
-          .createQuizSet("Math Quiz")
+          .createQuizSet("Math Quiz", 3, 1) // Add uniqueId as third parameter
           .accountsPartial({
             quizSet: quizSetPda,
             authority: authority.publicKey,
@@ -68,94 +53,99 @@ describe("k_3_hoot_program_arcium", () => {
         const quizSetAccount = await program.account.quizSet.fetch(quizSetPda);
         expect(quizSetAccount.name).to.equal("Math Quiz");
         expect(quizSetAccount.authority.toString()).to.equal(authority.publicKey.toString());
-        expect(quizSetAccount.questionCount).to.equal(0);
+        expect(quizSetAccount.questionCount).to.equal(3);
+        expect(quizSetAccount.isInitialized).to.equal(false);
       } catch (error) {
         console.error("Error creating quiz set:", error);
         throw error;
       }
     });
 
-    it("Should add an encrypted question", async () => {
-      const pubKey = new Uint8Array(32).fill(1); // Mock public key
-      const nonce = new BN(123456789);
+    it("Should add an encrypted question block", async () => {
+      const encryptedX = new Uint8Array(32).fill(1);
+      const encryptedY = new Uint8Array(32).fill(2);
+      const arciumPubkey = new Uint8Array(32).fill(3);
+      const nonce = new BN(123456789);  // Fixed: use BN instead of BigInt
 
       try {
         await program.methods
-          .addEncryptedQuestion(
-            "What is 2 + 2?",
+          .addEncryptedQuestionBlock(
             1,
-            Array.from(pubKey),
+            Array.from(encryptedX),
+            Array.from(encryptedY),
+            Array.from(arciumPubkey),
             nonce
           )
           .accountsPartial({
-            question: questionPda,
+            questionBlock: questionBlockPda,
             quizSet: quizSetPda,
             authority: authority.publicKey,
             systemProgram: SystemProgram.programId,
-            questionSeed: questionSeed.publicKey,
           })
           .signers([authority])
           .rpc();
 
-        const questionAccount = await program.account.question.fetch(questionPda);
-        expect(questionAccount.questionText).to.equal("What is 2 + 2?");
-        expect(questionAccount.questionNumber).to.equal(1);
-        expect(questionAccount.isEncrypted).to.equal(false);
+        const questionBlockAccount = await program.account.questionBlock.fetch(questionBlockPda);
+        expect(questionBlockAccount.questionIndex).to.equal(1);
+        expect(questionBlockAccount.quizSet.toString()).to.equal(quizSetPda.toString());
 
         const quizSetAccount = await program.account.quizSet.fetch(quizSetPda);
-        expect(quizSetAccount.questionCount).to.equal(1);
+        expect(quizSetAccount.isInitialized).to.equal(false); // Not yet initialized
       } catch (error) {
-        console.error("Error adding question:", error);
+        console.error("Error adding question block:", error);
         throw error;
       }
     });
 
-    it("Should add an encrypted answer", async () => {
-      const pubKey = new Uint8Array(32).fill(1); // Mock public key
-      const nonce = new BN(987654321);
+    it("Should mark quiz set as initialized when all questions added", async () => {
+      // Add 2 more questions to complete the set
+      for (let i = 2; i <= 3; i++) {
+        const [questionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("question_block"),
+            quizSetPda.toBuffer(),
+            Buffer.from([i])
+          ],
+          program.programId
+        );
 
-      try {
+        const encryptedX = new Uint8Array(32).fill(i);
+        const encryptedY = new Uint8Array(32).fill(i + 1);
+        const arciumPubkey = new Uint8Array(32).fill(i + 2);
+        const nonce = new BN(123456789 + i);  // Fixed: use BN instead of BigInt
+
         await program.methods
-          .addEncryptedAnswer(
-            "4",
-            true,
-            Array.from(pubKey),
+          .addEncryptedQuestionBlock(
+            i,
+            Array.from(encryptedX),
+            Array.from(encryptedY),
+            Array.from(arciumPubkey),
             nonce
           )
           .accountsPartial({
-            answer: answerPda,
-            question: questionPda,
+            questionBlock: questionPda,
             quizSet: quizSetPda,
             authority: authority.publicKey,
             systemProgram: SystemProgram.programId,
-            answerSeed: answerSeed.publicKey,
           })
           .signers([authority])
           .rpc();
-
-        const answerAccount = await program.account.answer.fetch(answerPda);
-        expect(answerAccount.answerText).to.equal("4");
-        expect(answerAccount.isCorrect).to.equal(true);
-        expect(answerAccount.isEncrypted).to.equal(false);
-      } catch (error) {
-        console.error("Error adding answer:", error);
-        throw error;
       }
+
+      // Check if quiz set is now initialized
+      const quizSetAccount = await program.account.quizSet.fetch(quizSetPda);
+      expect(quizSetAccount.isInitialized).to.equal(true);
     });
   });
 
   describe("Arcium Integration", () => {
-    it("Should initialize computation definitions", async () => {
-      // This test would require Arcium program setup
-      // For now, we'll just test that the functions exist
-      expect(typeof program.methods.initAddTogetherCompDef).to.equal("function");
-      // Note: These functions are commented out in the program for now
-      // expect(typeof program.methods.initEncryptQuizCompDef).to.equal("function");
-      // expect(typeof program.methods.initDecryptQuizCompDef).to.equal("function");
+    it("Should have encryption functions", async () => {
+      expect(typeof program.methods.encryptQuizData).to.equal("function");
+      expect(typeof program.methods.decryptQuizData).to.equal("function");
     });
 
-    it("Should have encryption function", async () => {
-      expect(typeof program.methods.encryptQuestionData).to.equal("function");
+    it("Should have validation function", async () => {
+      expect(typeof program.methods.validateAnswerOnchain).to.equal("function");
     });
   });
 });

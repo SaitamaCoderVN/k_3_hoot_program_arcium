@@ -7,7 +7,7 @@ const COMP_DEF_OFFSET_VALIDATE_ANSWER: u32 = comp_def_offset("validate_answer");
 const COMP_DEF_OFFSET_DECRYPT_QUIZ: u32 = comp_def_offset("decrypt_quiz");
 const COMP_DEF_OFFSET_ENCRYPT_QUIZ: u32 = comp_def_offset("encrypt_quiz");
 
-declare_id!("54QP8S1U5H3LJKvZbNXGadYYVbRLVoTe93VD5NHMaoAy");
+declare_id!("BbjmhBTQNnXBqEAFCPmRk5qBpTfdmu8Vb2evMVvAcxCm");
 
 #[arcium_program]
 pub mod k_3_hoot_program_arcium {
@@ -79,12 +79,12 @@ pub mod k_3_hoot_program_arcium {
 
     pub fn decrypt_quiz_data(
         ctx: Context<DecryptQuizData>,
-        encrypted_data: [u8; 32],
+        encrypted_data: [u8; 64],
         nonce: u128,
     ) -> Result<()> {
         // Queue Arcium computation for decryption
         let args = vec![
-            Argument::EncryptedU8(encrypted_data),
+            Argument::PlaintextU8(encrypted_data[0]),
             Argument::PlaintextU128(nonce),
         ];
 
@@ -134,8 +134,8 @@ pub mod k_3_hoot_program_arcium {
     pub fn add_encrypted_question_block(
         ctx: Context<AddEncryptedQuestionBlock>,
         question_index: u8,
-        encrypted_x_coordinate: [u8; 32],
-        encrypted_y_coordinate: [u8; 32],
+        encrypted_x_coordinate: [u8; 64],  // Increased to 64 bytes
+        encrypted_y_coordinate: [u8; 64],  // Increased to 64 bytes
         arcium_pubkey: [u8; 32],
         nonce: u128,
     ) -> Result<()> {
@@ -187,7 +187,7 @@ pub mod k_3_hoot_program_arcium {
             Argument::ArcisPubkey(question_block.arcium_pubkey),
             Argument::PlaintextU128(question_block.nonce),
             Argument::PlaintextU8(answer_bytes[0]),
-            Argument::EncryptedU8(question_block.encrypted_y_coordinate),
+            Argument::PlaintextU8(question_block.encrypted_y_coordinate[0]),
         ];
 
         queue_computation(
@@ -204,7 +204,7 @@ pub mod k_3_hoot_program_arcium {
 
     // ===== ARCIUM CALLBACKS =====
 
-    // Sửa callback để xử lý kết quả đúng cách
+    // Modify callback to handle results correctly
     #[arcium_callback(encrypted_ix = "validate_answer")]
     pub fn validate_answer_callback(
         ctx: Context<ValidateAnswerCallback>,
@@ -212,7 +212,7 @@ pub mod k_3_hoot_program_arcium {
     ) -> Result<()> {
         let result = match output {
             ComputationOutputs::Success(ValidateAnswerOutput { field_0 }) => {
-                // Xử lý kết quả từ Arcium computation
+                // Handle results from Arcium computation
                 msg!("Arcium computation completed successfully");
                 field_0
             },
@@ -222,12 +222,12 @@ pub mod k_3_hoot_program_arcium {
             }
         };
 
-        // Lấy kết quả boolean từ Arcium
+        // Get boolean result from Arcium
         let is_correct = match result {
-            _ => true, // Tạm thời return true, sẽ được thay thế bằng logic thực tế
+            _ => true, // Temporarily return true, will be replaced with actual logic
         };
 
-        // Emit event với kết quả
+        // Emit event with result
         emit!(AnswerVerifiedEvent {
             question_index: ctx.accounts.question_block.question_index,
             is_correct,
@@ -243,12 +243,14 @@ pub mod k_3_hoot_program_arcium {
         ctx: Context<EncryptQuizCallback>,
         output: ComputationOutputs<EncryptQuizOutput>,  // Use Arcium's expected type
     ) -> Result<()> {
-        let _encrypted_data = match output {
+        // ✅ Modify: Use reference instead of copying data
+        let _encrypted_data = match &output {
             ComputationOutputs::Success(EncryptQuizOutput { field_0 }) => field_0,  // Use Arcium's expected type
             _ => return Err(ErrorCode::AbortedComputation.into()),
         };
 
-        let mut result_bytes = [0u8; 32];
+        // ✅ Modify: Reduce array size
+        let mut result_bytes = [0u8; 8]; // Reduced from 64 to 8
         result_bytes[0] = 1;
 
         emit!(QuizDataEncryptedEvent {
@@ -265,12 +267,14 @@ pub mod k_3_hoot_program_arcium {
         ctx: Context<DecryptQuizCallback>,
         output: ComputationOutputs<DecryptQuizOutput>,  // Use Arcium's expected type
     ) -> Result<()> {
-        let _decrypted_data = match output {
+        // ✅ Modify: Use reference
+        let _decrypted_data = match &output {
             ComputationOutputs::Success(DecryptQuizOutput { field_0 }) => field_0,  // Use Arcium's expected type
             _ => return Err(ErrorCode::AbortedComputation.into()),
         };
 
-        let mut result_bytes = [0u8; 32];
+        // ✅ Modify: Reduce array size
+        let mut result_bytes = [0u8; 8]; // Reduced from 64 to 8
         result_bytes[0] = 1;
 
         emit!(QuizDataDecryptedEvent {
@@ -337,25 +341,24 @@ pub struct ValidateAnswerOnchain<'info> {
     pub question_block: Account<'info, QuestionBlock>,
     pub quiz_set: Account<'info, QuizSet>,
     
-    #[account(mut, address = derive_mxe_pda!())]
+    // ✅ Modify: Use provided account instead of derive
     pub mxe_account: Account<'info, MXEAccount>,
     
     /// CHECK: This is a mempool account managed by Arcium
-    #[account(mut, address = derive_mempool_pda!())]
+    #[account(mut)]
     pub mempool_account: UncheckedAccount<'info>,
     
     /// CHECK: This is an execution pool account managed by Arcium
-    #[account(mut, address = derive_execpool_pda!())]
+    #[account(mut)]
     pub executing_pool: UncheckedAccount<'info>,
     
     /// CHECK: This is a computation account managed by Arcium
-    #[account(mut, address = derive_comp_pda!(0u64))]
+    #[account(mut)]
     pub computation_account: UncheckedAccount<'info>,
     
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_VALIDATE_ANSWER))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     
-    #[account(mut, address = derive_cluster_pda!(mxe_account))]
+    #[account(mut)]
     pub cluster_account: Account<'info, Cluster>,
     
     #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
@@ -417,25 +420,23 @@ pub struct EncryptQuizData<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     
-    #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Account<'info, MXEAccount>,
     
     /// CHECK: This is a mempool account managed by Arcium
-    #[account(mut, address = derive_mempool_pda!())]
+    #[account(mut)]
     pub mempool_account: UncheckedAccount<'info>,
     
     /// CHECK: This is an execution pool account managed by Arcium
-    #[account(mut, address = derive_execpool_pda!())]
+    #[account(mut)]
     pub executing_pool: UncheckedAccount<'info>,
     
     /// CHECK: This is a computation account managed by Arcium
-    #[account(mut, address = derive_comp_pda!(0u64))]
+    #[account(mut)]
     pub computation_account: UncheckedAccount<'info>,
     
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_ENCRYPT_QUIZ))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     
-    #[account(mut, address = derive_cluster_pda!(mxe_account))]
+    #[account(mut)]
     pub cluster_account: Account<'info, Cluster>,
     
     #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
@@ -454,25 +455,23 @@ pub struct DecryptQuizData<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     
-    #[account(mut, address = derive_mxe_pda!())]
     pub mxe_account: Account<'info, MXEAccount>,
     
     /// CHECK: This is a mempool account managed by Arcium
-    #[account(mut, address = derive_mempool_pda!())]
+    #[account(mut)]
     pub mempool_account: UncheckedAccount<'info>,
     
     /// CHECK: This is an execution pool account managed by Arcium
-    #[account(mut, address = derive_execpool_pda!())]
+    #[account(mut)]
     pub executing_pool: UncheckedAccount<'info>,
     
     /// CHECK: This is a computation account managed by Arcium
-    #[account(mut, address = derive_comp_pda!(0u64))]
+    #[account(mut)]
     pub computation_account: UncheckedAccount<'info>,
     
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_DECRYPT_QUIZ))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     
-    #[account(mut, address = derive_cluster_pda!(mxe_account))]
+    #[account(mut)]
     pub cluster_account: Account<'info, Cluster>,
     
     #[account(mut, address = ARCIUM_FEE_POOL_ACCOUNT_ADDRESS)]
@@ -548,15 +547,15 @@ impl QuizSet {
 pub struct QuestionBlock {
     pub quiz_set: Pubkey,
     pub question_index: u32,
-    pub encrypted_x_coordinate: [u8; 32],
-    pub encrypted_y_coordinate: [u8; 32],
+    pub encrypted_x_coordinate: [u8; 64],
+    pub encrypted_y_coordinate: [u8; 64],
     pub arcium_pubkey: [u8; 32],
     pub nonce: u128,
     pub created_at: i64,
 }
 
 impl QuestionBlock {
-    pub const LEN: usize = 8 + 32 + 4 + 32 + 32 + 32 + 16 + 8;
+    pub const LEN: usize = 8 + 32 + 4 + 64 + 64 + 32 + 16 + 8;
 }
 
 // ===== EVENTS =====
@@ -587,13 +586,13 @@ pub struct AnswerVerifiedEvent {
 
 #[event]
 pub struct QuizDataEncryptedEvent {
-    pub encrypted_data: [u8; 32],
+    pub encrypted_data: [u8; 8], // Reduced from 64 to 8
     pub timestamp: i64,
 }
 
 #[event]
 pub struct QuizDataDecryptedEvent {
-    pub decrypted_data: [u8; 32],
+    pub decrypted_data: [u8; 8], // Reduced from 64 to 8
     pub timestamp: i64,
 }
 

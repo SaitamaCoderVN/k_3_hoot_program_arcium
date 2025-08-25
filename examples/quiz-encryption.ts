@@ -11,6 +11,8 @@ interface QuestionData {
   correctAnswer: string;
 }
 
+
+
 class SecureQuizEncryptor {
   private program: Program<K3HootProgramArcium>;
   private authority: Keypair;
@@ -91,69 +93,48 @@ class SecureQuizEncryptor {
     }
   }
 
-  // Fix 1: Modify encryptQuestionBlockWithIPFS to store actual data on IPFS
-  private async encryptQuestionBlockWithIPFS(questionData: QuestionData, nonce: BN): Promise<Uint8Array> {
-    // Create full data including correct answer
-    const fullData = {
-      question: questionData.question,
-      choices: questionData.choices,
-      correctAnswer: questionData.correctAnswer,
-      timestamp: Date.now()
-    };
+  // Simplified: Directly encrypt question data on-chain with XOR
+  private async encryptQuestionDataOnchain(questionData: QuestionData, nonce: BN): Promise<Uint8Array> {
+    // Combine question + choices into single data block (max 64 bytes)
+    const combinedText = `${questionData.question}|${questionData.choices.join('|')}`;
+    const textBytes = Buffer.from(combinedText, 'utf8');
     
-    const jsonString = JSON.stringify(fullData);
-    console.log(`   🔍 Full JSON: ${jsonString}`);
-    console.log(`   🔍 JSON length: ${jsonString.length} bytes`);
+    console.log(`   🔍 Combined text: ${combinedText}`);
+    console.log(`   🔍 Text length: ${textBytes.length} bytes`);
     
-    // Store actual data on IPFS (simulate)
-    const ipfsHash = await this.uploadToIPFS(jsonString);
-    console.log(`   🔗 IPFS Hash: ${ipfsHash}`);
+    // Pad or truncate to exactly 64 bytes
+    const paddedData = Buffer.alloc(64, 0);
+    const copyLength = Math.min(textBytes.length, 64);
+    textBytes.copy(paddedData, 0, 0, copyLength);
     
-    // Encrypt IPFS hash with nonce
-    const hashBytes = Buffer.from(ipfsHash, 'utf8');
-    const encrypted = Buffer.alloc(hashBytes.length); // Use actual length
+    // XOR encryption with nonce (64 bytes)
+    const encrypted = Buffer.alloc(64);
+    const nonceValue = nonce.toNumber();
     
-    for (let i = 0; i < hashBytes.length; i++) {
-      encrypted[i] = hashBytes[i] ^ (nonce.toNumber() & 0xFF);
+    for (let i = 0; i < 64; i++) {
+      encrypted[i] = paddedData[i] ^ (nonceValue & 0xFF);
     }
     
+    console.log(`   🔐 Encrypted data: ${encrypted.toString('hex').slice(0, 16)}...`);
     return new Uint8Array(encrypted);
   }
 
-  // Fix 2: Add method to upload data to IPFS
-  private async uploadToIPFS(data: string): Promise<string> {
-    try {
-      // In reality, you would call IPFS API
-      // Temporarily create fake but complete hash
-      const hash = `Qm${Buffer.from(data).toString('base64').slice(0, 44)}`;
-      
-      // Save data locally for testing
-      const filename = `ipfs-data-${Date.now()}.json`;
-      require('fs').writeFileSync(filename, data);
-      console.log(`    Data saved locally: ${filename}`);
-      
-      return hash;
-    } catch (error: any) {
-      console.log(`   ❌ IPFS upload failed: ${error.message}`);
-      // Fallback: create hash from data
-      return `Qm${Buffer.from(data).toString('base64').slice(0, 44)}`;
-    }
-  }
-
-  // Fix 3: Modify generateIPFSHash to no longer be necessary
-  // private generateIPFSHash(data: string): string { ... } // Delete this method
-
-  // Encrypt correct answer (y-coordinate) - only the correct answer
+  // Encrypt correct answer separately with XOR (64 bytes)
   private encryptCorrectAnswer(answer: string, nonce: BN): Uint8Array {
-    const answerBytes = Buffer.from(answer);
-    const encrypted = Buffer.alloc(32);
+    const answerBytes = Buffer.from(answer, 'utf8');
+    const encrypted = Buffer.alloc(64, 0);
     
-    // Encrypt: XOR with nonce (not timestamp)
+    // Pad answer to 64 bytes
+    const copyLength = Math.min(answerBytes.length, 64);
+    answerBytes.copy(encrypted, 0, 0, copyLength);
+    
+    // XOR encryption with nonce
     const nonceValue = nonce.toNumber();
-    for (let i = 0; i < 32; i++) {
-      encrypted[i] = (i < answerBytes.length ? answerBytes[i] : 0) ^ (nonceValue & 0xFF);
+    for (let i = 0; i < 64; i++) {
+      encrypted[i] = encrypted[i] ^ (nonceValue & 0xFF);
     }
     
+    console.log(`   🔐 Encrypted answer: ${encrypted.toString('hex').slice(0, 16)}...`);
     return new Uint8Array(encrypted);
   }
 
@@ -181,13 +162,13 @@ class SecureQuizEncryptor {
     // Encrypt data with unique nonce
     const uniqueNonce = new BN(Date.now() + questionIndex + Math.floor(Math.random() * 100));
     
-    // Use IPFS to store full data
-    const encryptedX = await this.encryptQuestionBlockWithIPFS(questionData, uniqueNonce);
+    // Encrypt question data directly on-chain
+    const encryptedX = await this.encryptQuestionDataOnchain(questionData, uniqueNonce);
     const encryptedY = this.encryptCorrectAnswer(questionData.correctAnswer, uniqueNonce);
     const arciumPubkey = randomBytes(32);
 
-    console.log(`   🔐 Encrypted X-coordinate (IPFS hash): ${Buffer.from(encryptedX).toString('hex').slice(0, 16)}...`);
-    console.log(`   🔐 Encrypted Y-coordinate: ${Buffer.from(encryptedY).toString('hex').slice(0, 16)}...`);
+    console.log(`   🔐 Encrypted X-coordinate (question + choices): ${Buffer.from(encryptedX).toString('hex').slice(0, 16)}...`);
+    console.log(`   🔐 Encrypted Y-coordinate (correct answer): ${Buffer.from(encryptedY).toString('hex').slice(0, 16)}...`);
     console.log(`   🔑 Arcium Pubkey: ${Buffer.from(arciumPubkey).toString('hex').slice(0, 16)}...`);
     console.log(`   🎲 Unique Nonce: ${uniqueNonce.toString()}`);
 
@@ -340,10 +321,11 @@ async function main() {
     console.log(`🔗 View on Explorer: https://explorer.solana.com/address/${quizSetPda}?cluster=devnet`);
     console.log(`\n🔐 Encryption Summary:`);
     console.log(`   📊 Total Questions: ${questions.length}`);
-    console.log(`   🔒 X-coordinates: Questions + 4 choices encrypted`);
-    console.log(`   🔒 Y-coordinates: Correct answers encrypted`);
+    console.log(`   🔒 X-coordinates: Questions + choices encrypted on-chain`);
+    console.log(`   🔒 Y-coordinates: Correct answers encrypted on-chain`);
     console.log(`   🔑 Each question uses unique nonce for security`);
     console.log(`   🌐 Arcium integration ready for on-chain operations`);
+    console.log(`   💾 All data stored directly on blockchain (no IPFS needed)`);
 
   } catch (error) {
     console.error("❌ Quiz creation failed:", error);

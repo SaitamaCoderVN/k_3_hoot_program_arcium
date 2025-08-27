@@ -1,17 +1,17 @@
 {
-  "quizSetName": "Math Quiz_1756111148665_qema",
-  "quizSetPda": "G5YMzpsQa5ib75D5RwBFPF1Exi3neY72YHJpZgkKweFf",
+  "quizSetName": "Math Quiz_1756319329580_v76y",
+  "quizSetPda": "GUyUyELUgG2u6o5DySRyCojEADHMNeerh4sppVNUg7vg",
   "totalQuestions": 3,
   "decryptedQuestions": 3,
   "userAnswers": [
-    "2x",
+    "x",
     "x = 4",
-    "6π"
+    "12π"
   ],
   "results": [
     {
       "questionIndex": 1,
-      "userAnswer": "2x",
+      "userAnswer": "x",
       "correctAnswer": "encrypted",
       "isCorrect": false,
       "verificationMethod": "Arcium On-chain"
@@ -20,17 +20,17 @@
       "questionIndex": 2,
       "userAnswer": "x = 4",
       "correctAnswer": "encrypted",
-      "isCorrect": false,
+      "isCorrect": true,
       "verificationMethod": "Arcium On-chain"
     },
     {
       "questionIndex": 3,
-      "userAnswer": "6π",
+      "userAnswer": "12π",
       "correctAnswer": "encrypted",
       "isCorrect": false,
       "verificationMethod": "Arcium On-chain"
     }
   ],
-  "score": 0,
-  "timestamp": 1756111396123
+  "score": 33.33333333333333,
+  "timestamp": 1756325974362
 }

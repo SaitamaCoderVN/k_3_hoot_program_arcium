@@ -1,17 +1,19 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { K3HootProgramArcium } from "../target/types/k_3_hoot_program_arcium";
-import { PublicKey, Keypair, SystemProgram, Connection } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Connection, Commitment } from "@solana/web3.js";
 import { randomBytes } from 'crypto';
 import { BN } from "@coral-xyz/anchor";
+import * as dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 interface QuestionData {
   question: string;
   choices: string[];
   correctAnswer: string;
 }
-
-
 
 class SecureQuizEncryptor {
   private program: Program<K3HootProgramArcium>;
@@ -248,7 +250,12 @@ class SecureQuizEncryptor {
 }
 
 async function main() {
-  const connection = new Connection("https://devnet.helius-rpc.com/?api-key=fd203766-a6ec-407b-824d-40e6b7bc44e5", "confirmed");
+  // Get RPC URL from environment
+  const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
+  const network = process.env.SOLANA_NETWORK || "devnet";
+  const commitment = process.env.COMMITMENT || "confirmed";
+  
+  const connection = new Connection(rpcUrl, commitment as Commitment);
   
   const authority = anchor.web3.Keypair.fromSecretKey(
     Buffer.from(JSON.parse(require('fs').readFileSync('/Users/saitamacoder/.config/solana/id.json', 'utf-8')))

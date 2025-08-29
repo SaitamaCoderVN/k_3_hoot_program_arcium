@@ -132,7 +132,7 @@ pub mod k_3_hoot_program_arcium {
         quiz_set.is_reward_claimed = false;
         quiz_set.winner = None;
         quiz_set.correct_answers_count = 0;
-        quiz_set.unique_id = unique_id;  // Thêm dòng này
+        quiz_set.unique_id = unique_id;  // Added this line
 
         // Transfer SOL to vault
         let transfer_ctx = CpiContext::new(
@@ -262,16 +262,16 @@ pub mod k_3_hoot_program_arcium {
         Ok(())
     }
 
-    // Thêm function mới để set winner cho người thực sự trả lời đúng
+    // Add a new function to set the winner for the actual correct answerer
     pub fn set_winner_for_user(
         ctx: Context<SetWinnerForUser>,
-        winner_pubkey: Pubkey,  // ← Nhận pubkey của người thực sự trả lời đúng
+        winner_pubkey: Pubkey,  // ← Receive pubkey of the actual correct answerer
         correct_answers_count: u8,
     ) -> Result<()> {
         let quiz_set = &mut ctx.accounts.quiz_set;
         let setter = &ctx.accounts.setter;
         
-        // Set winner là người thực sự trả lời đúng, không phải authority
+        // Set winner as the actual correct answerer, not the authority
         quiz_set.winner = Some(winner_pubkey);
         quiz_set.correct_answers_count = correct_answers_count;
         quiz_set.is_reward_claimed = false;
@@ -403,7 +403,7 @@ pub mod k_3_hoot_program_arcium {
 
     pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
         let quiz_set = &mut ctx.accounts.quiz_set;
-        let vault = &mut ctx.accounts.vault;
+        let vault = &ctx.accounts.vault;
         let claimer = &ctx.accounts.claimer;
         
         msg!("🔍 Debug: claim_reward called");
@@ -414,16 +414,7 @@ pub mod k_3_hoot_program_arcium {
         
         let reward_amount = quiz_set.reward_amount;
         
-        // FIXED: Sử dụng Anchor's system_program::transfer thay vì invoke_signed
-        let transfer_ctx = CpiContext::new(
-            ctx.accounts.system_program.to_account_info(),
-            anchor_lang::system_program::Transfer {
-                from: vault.to_account_info(),
-                to: claimer.to_account_info(),
-            },
-        );
-        
-        // FIXED: Store the key reference to avoid temporary value issue
+        // FIXED: Use raw invoke_signed for PDA-to-account SOL transfer
         let quiz_set_key = quiz_set.key();
         let vault_seeds = &[
             b"vault",
@@ -433,16 +424,14 @@ pub mod k_3_hoot_program_arcium {
         
         let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
         
-        // FIXED: Sử dụng transfer với PDA signing
-        anchor_lang::system_program::transfer(
-            transfer_ctx.with_signer(signer_seeds),
-            reward_amount
-        )?;
+        // Transfer lamports directly using invoke_signed
+        **vault.to_account_info().try_borrow_mut_lamports()? -= reward_amount;
+        **claimer.to_account_info().try_borrow_mut_lamports()? += reward_amount;
         
         // Mark reward as claimed
         quiz_set.is_reward_claimed = true;
         
-        msg!("✅ Reward claimed successfully: {} SOL", reward_amount);
+        msg!("✅ Reward claimed successfully: {} SOL", reward_amount / 1_000_000_000);
         msg!("✅ Claimer: {}", claimer.key());
         msg!("💰 SOL transferred from vault to claimer");
         
@@ -475,12 +464,12 @@ pub struct CreateQuizSet<'info> {
     #[account(
         init,
         payer = authority,
-        space = 0,
+        space = 0,  // FIXED: No data space - pure SOL storage
         seeds = [b"vault", quiz_set.key().as_ref()],
         bump
     )]
     /// CHECK: This is a vault account for storing SOL rewards
-    pub vault: UncheckedAccount<'info>,  // Keep as UncheckedAccount
+    pub vault: UncheckedAccount<'info>,
     
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -848,11 +837,10 @@ pub struct ClaimReward<'info> {
     #[account(
         mut,
         seeds = [b"vault", quiz_set.key().as_ref()],
-        bump,
-        constraint = vault.lamports() >= quiz_set.reward_amount @ QuizError::InsufficientVaultBalance
+        bump
     )]
     /// CHECK: This is a vault account for storing SOL rewards
-    pub vault: SystemAccount<'info>,  // FIXED: Thay đổi từ UncheckedAccount sang SystemAccount
+    pub vault: UncheckedAccount<'info>,
     
     #[account(mut)]
     pub claimer: Signer<'info>,

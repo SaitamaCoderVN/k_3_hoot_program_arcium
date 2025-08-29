@@ -26,26 +26,8 @@ class SecureQuizEncryptor {
     this.connection = connection;
   }
 
-  // Check if quiz set exists
-  async checkQuizSetExists(authority: PublicKey): Promise<{ exists: boolean; address?: string }> {
-    const [quizSetPda] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("quiz_set"),
-        authority.toBuffer()
-      ],
-      this.program.programId
-    );
-
-    try {
-      const accountInfo = await this.connection.getAccountInfo(quizSetPda);
-      return { exists: accountInfo !== null, address: quizSetPda.toString() };
-    } catch (error) {
-      return { exists: false };
-    }
-  }
-
   // Create quiz set with fixed seeds (temporary)
-  async createQuizSet(name: string, questionCount: number): Promise<string> {
+  async createQuizSet(name: string, questionCount: number, rewardAmount: number): Promise<string> {
     // Create unique name with timestamp and random string
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 6);
@@ -56,7 +38,7 @@ class SecureQuizEncryptor {
     // Generate unique_id for this quiz set
     const uniqueId = Math.floor(Math.random() * 256);
     
-    // Use seeds with unique_id to be compatible with program
+    // FIXED: Use seeds with unique_id to be compatible with program
     const [quizSetPda] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("quiz_set"),
@@ -66,15 +48,27 @@ class SecureQuizEncryptor {
       this.program.programId
     );
 
+    // FIXED: Create vault PDA using the same seeds as program
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("vault"),
+        quizSetPda.toBuffer()
+      ],
+      this.program.programId
+    );
+
     console.log(`📝 Transaction: Creating quiz set...`);
     console.log(`   Account: ${quizSetPda.toString()}`);
+    console.log(`   Vault: ${vaultPda.toString()}`);
     console.log(`   Seeds: ["quiz_set", "${this.authority.publicKey.toString()}", ${uniqueId}]`);
+    console.log(`   Reward: ${rewardAmount} SOL`);
     
     try {
       const tx = await this.program.methods
-        .createQuizSet(uniqueName, questionCount, uniqueId)
+        .createQuizSet(uniqueName, questionCount, uniqueId, new BN(rewardAmount * 1_000_000_000)) // Convert SOL to lamports
         .accountsPartial({
           quizSet: quizSetPda,
+          vault: vaultPda,
           authority: this.authority.publicKey,
           systemProgram: SystemProgram.programId,
         })
@@ -210,7 +204,8 @@ class SecureQuizEncryptor {
   // Create complete quiz
   async createCompleteQuiz(
     baseName: string, 
-    questions: QuestionData[]
+    questions: QuestionData[],
+    rewardAmount: number
   ): Promise<{ quizSetPda: string; questionBlocks: any[]; transactions: string[] }> {
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 6);
@@ -224,7 +219,7 @@ class SecureQuizEncryptor {
     // Create new quiz set each time
     console.log(`🚀 Step 1: Creating New Quiz Set`);
     console.log(`─`.repeat(50));
-    const quizSetPda = await this.createQuizSet(baseName, questions.length);
+    const quizSetPda = await this.createQuizSet(baseName, questions.length, rewardAmount);
     
     // Add each question
     const questionBlocks = [];
@@ -302,7 +297,8 @@ async function main() {
 
     const { quizSetPda, questionBlocks } = await encryptor.createCompleteQuiz(
       `Math Quiz`, // Remove timestamp, it will be added automatically
-      questions
+      questions,
+      0.1 // 0.1 SOL reward
     );
 
     // Save information with unique filename

@@ -1,19 +1,19 @@
 {
-  "quizSetName": "Math Quiz_1756322080318_zaus",
-  "quizSetPda": "Gyppb2GaVRwpJbtp9K1iH9ye3ozGWKUWWNGFNpZKHq6A",
+  "quizSetName": "Math Quiz_1756463557989_srue",
+  "quizSetPda": "CWYSzXYN75yF4WQV9bY9yB99BPW6ntupxYaFTGxifaD3",
   "totalQuestions": 3,
   "decryptedQuestions": 3,
   "userAnswers": [
-    "x",
+    "2x",
     "x = 4",
     "9π"
   ],
   "results": [
     {
       "questionIndex": 1,
-      "userAnswer": "x",
+      "userAnswer": "2x",
       "correctAnswer": "encrypted",
-      "isCorrect": false,
+      "isCorrect": true,
       "verificationMethod": "Arcium On-chain"
     },
     {
@@ -31,6 +31,7 @@
       "verificationMethod": "Arcium On-chain"
     }
   ],
-  "score": 66.66666666666666,
-  "timestamp": 1756326096696
+  "score": 100,
+  "isWinner": true,
+  "timestamp": 1756463585024
 }

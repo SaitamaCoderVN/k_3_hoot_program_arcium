@@ -7,7 +7,7 @@ const COMP_DEF_OFFSET_VALIDATE_ANSWER: u32 = comp_def_offset("validate_answer");
 const COMP_DEF_OFFSET_DECRYPT_QUIZ: u32 = comp_def_offset("decrypt_quiz");
 const COMP_DEF_OFFSET_ENCRYPT_QUIZ: u32 = comp_def_offset("encrypt_quiz");
 
-declare_id!("BbjmhBTQNnXBqEAFCPmRk5qBpTfdmu8Vb2evMVvAcxCm");
+declare_id!("DWamNnSs9wjxndPrHAqfD747uvynZYyyq45FXu3RKNrP");
 
 #[arcium_program]
 pub mod k_3_hoot_program_arcium {
@@ -114,11 +114,13 @@ pub mod k_3_hoot_program_arcium {
         ctx: Context<CreateQuizSet>, 
         name: String,
         question_count: u8,
-        _unique_id: u8
+        unique_id: u8,
+        reward_amount: u64, // SOL amount in lamports
     ) -> Result<()> {
         require!(name.len() > 0, QuizError::EmptyName);
         require!(name.len() <= 100, QuizError::NameTooLong);
         require!(question_count > 0 && question_count <= 50, QuizError::InvalidQuestionCount);
+        require!(reward_amount > 0, QuizError::InvalidRewardAmount);
 
         let quiz_set = &mut ctx.accounts.quiz_set;
         quiz_set.authority = ctx.accounts.authority.key();
@@ -126,16 +128,32 @@ pub mod k_3_hoot_program_arcium {
         quiz_set.question_count = question_count;
         quiz_set.created_at = Clock::get()?.unix_timestamp;
         quiz_set.is_initialized = false;
+        quiz_set.reward_amount = reward_amount;
+        quiz_set.is_reward_claimed = false;
+        quiz_set.winner = None;
+        quiz_set.correct_answers_count = 0;
+        quiz_set.unique_id = unique_id;  // Thêm dòng này
+
+        // Transfer SOL to vault
+        let transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.authority.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+            },
+        );
+        anchor_lang::system_program::transfer(transfer_ctx, reward_amount)?;
 
         emit!(QuizSetCreated {
             quiz_set: quiz_set.key(),
             authority: ctx.accounts.authority.key(),
             name: quiz_set.name.clone(),
             question_count: quiz_set.question_count,
+            reward_amount: quiz_set.reward_amount,
             timestamp: quiz_set.created_at,
         });
 
-        msg!("Quiz set '{}' created with {} questions", quiz_set.name, quiz_set.question_count);
+        msg!("Quiz set '{}' created with {} questions and {} SOL reward", quiz_set.name, quiz_set.question_count, reward_amount / 1_000_000_000);
         Ok(())
     }
 
@@ -218,6 +236,61 @@ pub mod k_3_hoot_program_arcium {
         Ok(())
     }
 
+    // ===== NEW DEVNET TESTING FUNCTION =====
+    
+    // Function to manually set winner for devnet testing (bypasses Arcium callback)
+    pub fn set_winner_for_devnet(
+        ctx: Context<SetWinnerForDevnet>,
+        user_answers: Vec<String>,
+        correct_answers: Vec<String>,
+    ) -> Result<()> {
+        let quiz_set = &mut ctx.accounts.quiz_set;
+        
+        // Debug logging
+        msg!("🔍 Debug: Setting winner for devnet");
+        msg!("🔍 Debug: quiz_set.key() = {}", quiz_set.key());
+        msg!("🔍 Debug: authority.key() = {}", ctx.accounts.authority.key());
+        
+        // Set winner to authority (for devnet testing)
+        quiz_set.winner = Some(ctx.accounts.authority.key());
+        quiz_set.correct_answers_count = user_answers.len() as u8;
+        quiz_set.is_reward_claimed = false;
+        
+        msg!("✅ Winner set successfully: {}", ctx.accounts.authority.key());
+        msg!("✅ correct_answers_count set to: {}", quiz_set.correct_answers_count);
+        
+        Ok(())
+    }
+
+    // Thêm function mới để set winner cho người thực sự trả lời đúng
+    pub fn set_winner_for_user(
+        ctx: Context<SetWinnerForUser>,
+        winner_pubkey: Pubkey,  // ← Nhận pubkey của người thực sự trả lời đúng
+        correct_answers_count: u8,
+    ) -> Result<()> {
+        let quiz_set = &mut ctx.accounts.quiz_set;
+        let setter = &ctx.accounts.setter;
+        
+        // Set winner là người thực sự trả lời đúng, không phải authority
+        quiz_set.winner = Some(winner_pubkey);
+        quiz_set.correct_answers_count = correct_answers_count;
+        quiz_set.is_reward_claimed = false;
+        
+        msg!("✅ Winner set successfully: {}", winner_pubkey);
+        msg!("✅ correct_answers_count set to: {}", correct_answers_count);
+        msg!("✅ Set by: {}", setter.key());
+        
+        // Emit event
+        emit!(QuizCompleted {
+            quiz_set: quiz_set.key(),
+            winner: winner_pubkey,
+            reward_amount: quiz_set.reward_amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+        
+        Ok(())
+    }
+
     // ===== ARCIUM CALLBACKS =====
 
     // FIXED: Proper callback handling with actual result logic
@@ -242,9 +315,38 @@ pub mod k_3_hoot_program_arcium {
             _ => true, // Temporarily return true, will be replaced with actual logic
         };
 
+        // Update quiz set with answer result
+        let quiz_set = &mut ctx.accounts.quiz_set;
+        let question_block = &ctx.accounts.question_block;
+        
+        // Mark this question as answered correctly
+        if is_correct {
+            // Check if all questions are answered correctly
+            if quiz_set.correct_answers_count == 0 {
+                quiz_set.correct_answers_count = 1;
+            } else {
+                quiz_set.correct_answers_count += 1;
+            }
+            
+            // If all questions answered correctly, set winner
+            if quiz_set.correct_answers_count >= quiz_set.question_count {
+                quiz_set.winner = Some(ctx.accounts.payer.key());
+                quiz_set.is_reward_claimed = false;
+                
+                emit!(QuizCompleted {
+                    quiz_set: quiz_set.key(),
+                    winner: ctx.accounts.payer.key(),
+                    reward_amount: quiz_set.reward_amount,
+                    timestamp: Clock::get()?.unix_timestamp,
+                });
+                
+                msg!("🎉 Quiz completed! Winner: {}", ctx.accounts.payer.key());
+            }
+        }
+
         // Emit event with actual result
         emit!(AnswerVerifiedEvent {
-            question_index: ctx.accounts.question_block.question_index,
+            question_index: question_block.question_index,
             is_correct,
             timestamp: Clock::get()?.unix_timestamp,
         });
@@ -296,12 +398,70 @@ pub mod k_3_hoot_program_arcium {
         msg!("Quiz data decrypted successfully");
         Ok(())
     }
+
+    // ===== NEW VAULT MANAGEMENT FUNCTIONS =====
+
+    pub fn claim_reward(ctx: Context<ClaimReward>) -> Result<()> {
+        let quiz_set = &mut ctx.accounts.quiz_set;
+        let vault = &mut ctx.accounts.vault;
+        let claimer = &ctx.accounts.claimer;
+        
+        msg!("🔍 Debug: claim_reward called");
+        msg!("🔍 Debug: quiz_set.is_initialized = {}", quiz_set.is_initialized);
+        msg!("🔍 Debug: quiz_set.winner = {:?}", quiz_set.winner);
+        msg!("🔍 Debug: quiz_set.is_reward_claimed = {}", quiz_set.is_reward_claimed);
+        msg!("🔍 Debug: claimer = {}", claimer.key());
+        
+        let reward_amount = quiz_set.reward_amount;
+        
+        // FIXED: Sử dụng Anchor's system_program::transfer thay vì invoke_signed
+        let transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: vault.to_account_info(),
+                to: claimer.to_account_info(),
+            },
+        );
+        
+        // FIXED: Store the key reference to avoid temporary value issue
+        let quiz_set_key = quiz_set.key();
+        let vault_seeds = &[
+            b"vault",
+            quiz_set_key.as_ref(),
+            &[ctx.bumps.vault]
+        ];
+        
+        let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
+        
+        // FIXED: Sử dụng transfer với PDA signing
+        anchor_lang::system_program::transfer(
+            transfer_ctx.with_signer(signer_seeds),
+            reward_amount
+        )?;
+        
+        // Mark reward as claimed
+        quiz_set.is_reward_claimed = true;
+        
+        msg!("✅ Reward claimed successfully: {} SOL", reward_amount);
+        msg!("✅ Claimer: {}", claimer.key());
+        msg!("💰 SOL transferred from vault to claimer");
+        
+        // Emit event
+        emit!(RewardClaimed {
+            quiz_set: quiz_set.key(),
+            winner: claimer.key(),
+            reward_amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+        
+        Ok(())
+    }
 }
 
 // ===== ACCOUNT STRUCTURES =====
 
 #[derive(Accounts)]
-#[instruction(name: String, question_count: u8, unique_id: u8)]
+#[instruction(name: String, question_count: u8, unique_id: u8, reward_amount: u64)]
 pub struct CreateQuizSet<'info> {
     #[account(
         init,
@@ -311,6 +471,16 @@ pub struct CreateQuizSet<'info> {
         bump
     )]
     pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(
+        init,
+        payer = authority,
+        space = 0,
+        seeds = [b"vault", quiz_set.key().as_ref()],
+        bump
+    )]
+    /// CHECK: This is a vault account for storing SOL rewards
+    pub vault: UncheckedAccount<'info>,  // Keep as UncheckedAccount
     
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -339,6 +509,35 @@ pub struct AddEncryptedQuestionBlock<'info> {
     
     #[account(mut)]
     pub authority: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetWinnerForDevnet<'info> {
+    #[account(
+        mut,
+        has_one = authority
+    )]
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetWinnerForUser<'info> {
+    #[account(
+        mut,
+        constraint = quiz_set.is_initialized @ QuizError::QuizNotInitialized,
+        constraint = quiz_set.winner.is_none() @ QuizError::WinnerAlreadySet
+    )]
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(mut)]
+    pub setter: Signer<'info>, // Anyone can set winner, not just authority
     
     pub system_program: Program<'info, System>,
 }
@@ -419,6 +618,8 @@ pub struct ValidateAnswerCallback<'info> {
     /// CHECK: instructions_sysvar, checked by the account constraint
     pub instructions_sysvar: AccountInfo<'info>,
     pub question_block: Account<'info, QuestionBlock>,
+    #[account(mut)]
+    pub quiz_set: Account<'info, QuizSet>,
 }
 
 #[callback_accounts("encrypt_quiz", payer)]
@@ -485,7 +686,7 @@ pub struct EncryptQuizData<'info> {
         mut,
         address = derive_comp_pda!(computation_offset)
     )]
-    /// CHECK: This is an execution pool account managed by Arcium
+    /// CHECK: This is a computation account managed by Arcium
     pub computation_account: UncheckedAccount<'info>,
     
     #[account(
@@ -493,7 +694,6 @@ pub struct EncryptQuizData<'info> {
     )]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     
-    // FIXED: Added missing cluster_account
     #[account(
         mut,
         address = derive_cluster_pda!(mxe_account)
@@ -533,7 +733,7 @@ pub struct DecryptQuizData<'info> {
         mut,
         address = derive_mempool_pda!()
     )]
-    /// CHECK: This is an execution pool account managed by Arcium
+    /// CHECK: This is a mempool account managed by Arcium
     pub mempool_account: UncheckedAccount<'info>,
     
     #[account(
@@ -547,7 +747,7 @@ pub struct DecryptQuizData<'info> {
         mut,
         address = derive_comp_pda!(computation_offset)
     )]
-    /// CHECK: This is an execution pool account managed by Arcium
+    /// CHECK: This is a computation account managed by Arcium
     pub computation_account: UncheckedAccount<'info>,
     
     #[account(
@@ -555,7 +755,6 @@ pub struct DecryptQuizData<'info> {
     )]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     
-    // FIXED: Added missing cluster_account
     #[account(
         mut,
         address = derive_cluster_pda!(mxe_account)
@@ -633,6 +832,34 @@ pub struct InitDecryptQuizCompDef<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct ClaimReward<'info> {
+    #[account(
+        mut,
+        seeds = [b"quiz_set", quiz_set.authority.as_ref(), &[quiz_set.unique_id]],
+        bump,
+        constraint = quiz_set.is_initialized @ QuizError::QuizNotInitialized,
+        constraint = quiz_set.winner.is_some() @ QuizError::QuizNotCompleted,
+        constraint = !quiz_set.is_reward_claimed @ QuizError::RewardAlreadyClaimed,
+        constraint = quiz_set.winner.unwrap() == claimer.key() @ QuizError::NotWinner
+    )]
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(
+        mut,
+        seeds = [b"vault", quiz_set.key().as_ref()],
+        bump,
+        constraint = vault.lamports() >= quiz_set.reward_amount @ QuizError::InsufficientVaultBalance
+    )]
+    /// CHECK: This is a vault account for storing SOL rewards
+    pub vault: SystemAccount<'info>,  // FIXED: Thay đổi từ UncheckedAccount sang SystemAccount
+    
+    #[account(mut)]
+    pub claimer: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
 // ===== DATA STRUCTURES =====
 
 #[account]
@@ -642,10 +869,15 @@ pub struct QuizSet {
     pub question_count: u8,
     pub created_at: i64,
     pub is_initialized: bool,
+    pub reward_amount: u64,           // SOL amount in lamports
+    pub is_reward_claimed: bool,      // Whether reward has been claimed
+    pub winner: Option<Pubkey>,       // Winner's public key
+    pub correct_answers_count: u8,    // Count of correct answers
+    pub unique_id: u8,  // Thêm field này
 }
 
 impl QuizSet {
-    pub const LEN: usize = 8 + 32 + 4 + 100 + 1 + 8 + 1;
+    pub const LEN: usize = 8 + 32 + 4 + 100 + 1 + 8 + 1 + 8 + 1 + 33 + 1 + 1; // +1 cho unique_id
 }
 
 #[account]
@@ -671,6 +903,7 @@ pub struct QuizSetCreated {
     pub authority: Pubkey,
     pub name: String,
     pub question_count: u8,
+    pub reward_amount: u64,
     pub timestamp: i64,
 }
 
@@ -701,6 +934,22 @@ pub struct QuizDataDecryptedEvent {
     pub timestamp: i64,
 }
 
+#[event]
+pub struct QuizCompleted {
+    pub quiz_set: Pubkey,
+    pub winner: Pubkey,
+    pub reward_amount: u64,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct RewardClaimed {
+    pub quiz_set: Pubkey,
+    pub winner: Pubkey,
+    pub reward_amount: u64,
+    pub timestamp: i64,
+}
+
 // ===== ERROR CODES =====
 
 #[error_code]
@@ -717,6 +966,22 @@ pub enum QuizError {
     Unauthorized,
     #[msg("Quiz set already initialized")]
     QuizSetAlreadyInitialized,
+    #[msg("Invalid reward amount")]
+    InvalidRewardAmount,
+    #[msg("Quiz set not initialized")]
+    QuizNotInitialized,
+    #[msg("Quiz not completed")]
+    QuizNotCompleted,
+    #[msg("Reward already claimed")]
+    RewardAlreadyClaimed,
+    #[msg("Not the winner")]
+    NotWinner,
+    #[msg("Winner already set")]
+    WinnerAlreadySet,
+    #[msg("Invalid answer count")]
+    InvalidAnswerCount,
+    #[msg("Insufficient vault balance")]
+    InsufficientVaultBalance,
 }
 
 #[error_code]

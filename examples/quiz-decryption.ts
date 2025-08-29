@@ -7,13 +7,6 @@ import * as readline from 'readline';
 import { awaitComputationFinalization } from "@arcium-hq/client";
 import * as crypto from 'crypto';
 import * as dotenv from 'dotenv';
-import {
-  getArciumEnv,
-  getCompDefAccOffset,
-  getArciumAccountBaseSeed,
-  getArciumProgAddress,
-  getMXEAccAddress,
-} from "@arcium-hq/client";
 
 // Load environment variables
 dotenv.config();
@@ -39,29 +32,11 @@ class QuizDecryption {
   private program: Program<K3HootProgramArcium>;
   private connection: Connection;
   private authority: Keypair;
-  private arciumEnv: any;
 
-  // Modify the constructor to initialize computation definitions
   constructor(program: Program<K3HootProgramArcium>, connection: Connection, authority: Keypair) {
     this.program = program;
     this.connection = connection;
     this.authority = authority;
-    
-    // Fix: Use hardcoded values instead of getArciumEnv()
-    this.arciumEnv = {
-      arciumClusterPubkey: new PublicKey("11111111111111111111111111111111") // Placeholder
-    };
-  }
-
-  // Fix: Initialize MXE account before computation definitions
-  async initialize(): Promise<void> {
-    console.log("🔧 Initializing system for devnet testing...");
-    
-    // Skip Arcium initialization on devnet
-    console.log("⚠️ Skipping Arcium initialization on devnet");
-    console.log("🔧 Using local decryption for answer validation");
-    
-    console.log("✅ System initialization completed");
   }
 
   // Find quiz sets
@@ -82,6 +57,7 @@ class QuizDecryption {
         console.log(`      Address: ${set.publicKey.toString()}`);
         console.log(`      Questions: ${set.account.questionCount}`);
         console.log(`      Created: ${created.toLocaleString()}`);
+        console.log(`      Reward: ${set.account.rewardAmount.toNumber() / 1_000_000_000} SOL`);
       });
       
       return filteredSets;
@@ -102,6 +78,9 @@ class QuizDecryption {
       const quizSet = await this.program.account.quizSet.fetch(new PublicKey(quizSetPda));
       console.log(`   ✅ Quiz Set: ${quizSet.name}`);
       console.log(`   🔢 Question Count: ${quizSet.questionCount}`);
+      console.log(`   💰 Reward Amount: ${quizSet.rewardAmount.toNumber() / 1_000_000_000} SOL`);
+      console.log(`   🏆 Winner: ${quizSet.winner ? quizSet.winner.toString() : 'None'}`);
+      console.log(`   💰 Reward Claimed: ${quizSet.isRewardClaimed ? 'Yes' : 'No'}`);
       
       // Fetch all question blocks
       const questionBlocks = [];
@@ -278,89 +257,81 @@ class QuizDecryption {
     console.log(`   🔒 Correct answer: encrypted (verified on-chain)`);
     
     try {
-      // For testing on devnet, skip Arcium and use local decryption
-      console.log(`    Devnet mode: Using local decryption for testing`);
-      
-      // Decrypt correct answer from Y-coordinate using the same nonce
-      const nonce = questionBlock.nonce.toNumber();
-      const encryptedY = questionBlock.encryptedYCoordinate;
-      
-      console.log(`    Decrypting correct answer from Y-coordinate...`);
-      console.log(`    Using nonce: ${nonce}`);
-      
-      // Decrypt Y-coordinate (correct answer) using XOR
-      const decryptedY = Buffer.alloc(64);
-      for (let i = 0; i < 64; i++) {
-        decryptedY[i] = encryptedY[i] ^ (nonce & 0xFF);
-      }
-      
-      // Convert decrypted bytes to string
-      const correctAnswer = decryptedY.toString('utf8').replace(/\0/g, '');
-      console.log(`   🔓 Decrypted correct answer: ${correctAnswer}`);
-      
-      // Compare with user answer
-      const isCorrect = userAnswer === correctAnswer;
-      
-      console.log(`   ✅ Validation result: ${isCorrect ? 'Correct' : 'Incorrect'}`);
-      console.log(`   🔍 Expected: ${correctAnswer}, Got: ${userAnswer}`);
-      
-      return isCorrect;
-      
+        // For testing on devnet, skip Arcium and use local decryption
+        console.log(`    Devnet mode: Using local decryption for testing`);
+        
+        // Decrypt correct answer from Y-coordinate using the same nonce
+        const nonce = questionBlock.nonce.toNumber();
+        const encryptedY = questionBlock.encryptedYCoordinate;
+        
+        console.log(`    Decrypting correct answer from Y-coordinate...`);
+        console.log(`    Using nonce: ${nonce}`);
+        
+        // Decrypt Y-coordinate (correct answer) using XOR
+        const decryptedY = Buffer.alloc(64);
+        for (let i = 0; i < 64; i++) {
+            decryptedY[i] = encryptedY[i] ^ (nonce & 0xFF);
+        }
+        
+        // Convert decrypted bytes to string
+        const correctAnswer = decryptedY.toString('utf8').replace(/\0/g, '');
+        console.log(`   🔓 Decrypted correct answer: ${correctAnswer}`);
+        
+        // Compare with user answer
+        const isCorrect = userAnswer === correctAnswer;
+        
+        console.log(`   ✅ Validation result: ${isCorrect ? 'Correct' : 'Incorrect'}`);
+        console.log(`   🔍 Expected: ${correctAnswer}, Got: ${userAnswer}`);
+        
+        return isCorrect;
+        
     } catch (error: any) {
-      console.log(`   ❌ Verification failed: ${error.message}`);
-      return false;
+        console.log(`   ❌ Verification failed: ${error.message}`);
+        return false;
     }
-  }
+}
 
-  // Verify all answers
-  async verifyAllAnswers(
-    questionBlocks: any[],
-    userAnswers: string[],
-    decryptedQuestions: DecryptedQuestion[]
-  ): Promise<{
-    results: any[];
-    score: number;
-  }> {
-    console.log("\n🔐 Verifying answers on-chain...");
+// Fix: Skip winner setting if already set and go directly to reward claiming
+async setWinnerForDevnet(quizSetPda: string, userAnswers: string[], correctAnswers: string[]): Promise<boolean> {
+    console.log(`\n🎉 Setting winner for devnet testing...`);
     
-    const results = [];
-    let correctCount = 0;
-    
-    for (let i = 0; i < questionBlocks.length; i++) {
-      const questionBlock = questionBlocks[i];
-      const userAnswer = userAnswers[i] || "";
-      
-      console.log(`\n🔐 Verifying Question ${questionBlock.questionIndex}:`);
-      console.log(`   📝 User answer: ${userAnswer}`);
-      console.log(`   🔒 Correct answer: encrypted (verified on-chain)`);
-      
-      const isCorrect = await this.verifyAnswerOnchain(questionBlock, userAnswer);
-      
-      if (isCorrect) {
-        correctCount++;
-      }
-      
-      results.push({
-        questionIndex: questionBlock.questionIndex,
-        userAnswer,
-        correctAnswer: "encrypted", // Never exposed
-        isCorrect,
-        verificationMethod: "Arcium On-chain"
-      });
+    try {
+        // Check if winner is already set
+        const quizSetAccount = await this.program.account.quizSet.fetch(new PublicKey(quizSetPda));
+        
+        // FIXED: Check if winner exists (not null) instead of using isSome()
+        if (quizSetAccount.winner) {
+            console.log(`✅ Winner already set: ${quizSetAccount.winner.toString()}`);
+            console.log(`✅ Skipping winner setting - proceeding to reward claiming`);
+            return true;
+        }
+        
+        // Only set winner if not already set
+        const winnerSet = await this.program.methods
+            .setWinnerForUser(
+                this.authority.publicKey,
+                userAnswers.length
+            )
+            .accountsPartial({
+                quizSet: new PublicKey(quizSetPda),
+                setter: this.authority.publicKey,
+                systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .signers([this.authority])
+            .rpc({ commitment: "confirmed" });
+
+        console.log(`✅ Winner set successfully!`);
+        console.log(`   Transaction: https://explorer.solana.com/tx/${winnerSet}?cluster=devnet`);
+        
+        await this.connection.confirmTransaction(winnerSet, "confirmed");
+        console.log(`✅ Transaction confirmed!`);
+        
+        return true;
+    } catch (error: any) {
+        console.error(`❌ Failed to set winner:`, error);
+        return false;
     }
-    
-    const score = (correctCount / questionBlocks.length) * 100;
-    
-    console.log(`\n📊 Verification Results:`);
-    results.forEach(result => {
-      const status = result.isCorrect ? "✅" : "❌";
-      console.log(`   Question ${result.questionIndex}: ${status} ${result.userAnswer}`);
-    });
-    
-    console.log(`\n🎯 Final Score: ${correctCount}/${questionBlocks.length} (${score.toFixed(1)}%)`);
-    
-    return { results, score };
-  }
+}
 
   // Modify method takeQuiz to use readline
   private async takeQuiz(decryptedQuestions: DecryptedQuestion[]): Promise<string[]> {
@@ -411,12 +382,157 @@ class QuizDecryption {
     return userAnswers;
   }
 
+  // Fix: Improved reward claiming with proper error handling
+  async claimReward(quizSetPda: string): Promise<boolean> {
+    console.log(`\n💰 Attempting to claim SOL reward...`);
+    
+    try {
+        // FIXED: Derive vault PDA using the exact same seeds as quiz creation
+        const quizSetPubkey = new PublicKey(quizSetPda);
+        
+        // FIXED: Use findProgramAddressSync to get both PDA and bump
+        const [vaultPda, vaultBump] = anchor.web3.PublicKey.findProgramAddressSync(
+            [
+                Buffer.from("vault"),
+                quizSetPubkey.toBuffer()
+            ],
+            this.program.programId
+        );
+        
+        console.log(`   🔐 Quiz Set: ${quizSetPda}`);
+        console.log(`   🏦 Vault: ${vaultPda.toString()}`);
+        console.log(`   🎲 Vault Bump: ${vaultBump}`);
+        console.log(`   👤 Claimer: ${this.authority.publicKey.toString()}`);
+        
+        // DEBUG: Show the exact seeds being used
+        console.log(`   🔍 Vault PDA Seeds:`);
+        console.log(`      Seed 1: "vault" (${Buffer.from("vault").toString('hex')})`);
+        console.log(`      Seed 2: ${quizSetPubkey.toString()} (${quizSetPubkey.toBuffer().toString('hex')})`);
+        console.log(`      Bump: ${vaultBump}`);
+        console.log(`   Program ID: ${this.program.programId.toString()}`);
+        
+        // DEBUG: Check vault account details
+        const vaultAccountInfo = await this.connection.getAccountInfo(vaultPda);
+        if (vaultAccountInfo) {
+            console.log(`   🔍 Vault account exists: ${vaultAccountInfo.lamports / 1e9} SOL`);
+            console.log(`   🔍 Vault owner: ${vaultAccountInfo.owner.toString()}`);
+        } else {
+            console.log(`   ❌ Vault account does not exist!`);
+            console.log(`   Expected vault: ${vaultPda.toString()}`);
+            return false;
+        }
+        
+        // Check account state before claiming
+        const quizSetAccount = await this.program.account.quizSet.fetch(new PublicKey(quizSetPda));
+        console.log(`   🔍 Pre-claim check:`);
+        console.log(`       winner = ${quizSetAccount.winner?.toString() || 'None'}`);
+        console.log(`      🔍 correct_answers_count = ${quizSetAccount.correctAnswersCount}`);
+        console.log(`      🔍 is_reward_claimed = ${quizSetAccount.isRewardClaimed}`);
+        
+        if (!quizSetAccount.winner) {
+            console.log(`   ❌ Winner not set, cannot claim reward`);
+            return false;
+        }
+        
+        if (quizSetAccount.isRewardClaimed) {
+            console.log(`   ❌ Reward already claimed`);
+            return false;
+        }
+        
+        console.log(`   🚀 Proceeding with reward claim...`);
+        
+        const tx = await this.program.methods
+            .claimReward()
+            .accountsPartial({
+                quizSet: new PublicKey(quizSetPda),
+                vault: vaultPda,
+                claimer: this.authority.publicKey,
+                systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .signers([this.authority])
+            .rpc({ commitment: "confirmed" });
+        
+        console.log(`   ✅ Reward claimed successfully!`);
+        console.log(`    Transaction: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+        
+        await this.connection.confirmTransaction(tx, "confirmed");
+        console.log(`   ✅ Transaction confirmed!`);
+        
+        return true;
+        
+    } catch (error: any) {
+        console.log(`   ❌ Failed to claim reward: ${error.message}`);
+        
+        if (error.message.includes("instruction spent from the balance of an account it does not own")) {
+            console.log(`   💡 This error suggests a vault account mismatch`);
+            console.log(`   💡 The vault PDA being used may not match the actual vault account`);
+            console.log(`   Check if the vault PDA derivation matches quiz creation`);
+        }
+        
+        return false;
+    }
+}
+
+  // Verify all answers
+  async verifyAllAnswers(
+    questionBlocks: any[],
+    userAnswers: string[],
+    decryptedQuestions: DecryptedQuestion[]
+  ): Promise<{
+    results: any[];
+    score: number;
+    isWinner: boolean;
+  }> {
+    console.log("\n🔐 Verifying answers on-chain...");
+    
+    const results = [];
+    let correctCount = 0;
+    
+    for (let i = 0; i < questionBlocks.length; i++) {
+      const questionBlock = questionBlocks[i];
+      const userAnswer = userAnswers[i] || "";
+      
+      console.log(`\n🔐 Verifying Question ${questionBlock.questionIndex}:`);
+      console.log(`   📝 User answer: ${userAnswer}`);
+      console.log(`   🔒 Correct answer: encrypted (verified on-chain)`);
+      
+      const isCorrect = await this.verifyAnswerOnchain(questionBlock, userAnswer);
+      
+      if (isCorrect) {
+        correctCount++;
+      }
+      
+      results.push({
+        questionIndex: questionBlock.questionIndex,
+        userAnswer,
+        correctAnswer: "encrypted", // Never exposed
+        isCorrect,
+        verificationMethod: "Arcium On-chain"
+      });
+    }
+    
+    const score = (correctCount / questionBlocks.length) * 100;
+    const isWinner = correctCount === questionBlocks.length;
+    
+    console.log(`\n📊 Verification Results:`);
+    results.forEach(result => {
+      const status = result.isCorrect ? "✅" : "❌";
+      console.log(`   Question ${result.questionIndex}: ${status} ${result.userAnswer}`);
+    });
+    
+    console.log(`\n🎯 Final Score: ${correctCount}/${questionBlocks.length} (${score.toFixed(1)}%)`);
+    
+    if (isWinner) {
+      console.log(`🎉 CONGRATULATIONS! You answered all questions correctly!`);
+      console.log(`💰 You can now claim your SOL reward!`);
+    }
+    
+    return { results, score, isWinner };
+  }
+
   // Main function
   async run(): Promise<void> {
     try {
-      // Initialize Arcium first
-      await this.initialize();
-      
       // Find quiz sets
       const quizSets = await this.findQuizSets();
       
@@ -493,7 +609,78 @@ class QuizDecryption {
       const userAnswers = await this.takeQuiz(decryptedQuestions);
       
       // Verify answers
-      const { results, score } = await this.verifyAllAnswers(questionBlocks, userAnswers, decryptedQuestions);
+      const { results, score, isWinner } = await this.verifyAllAnswers(questionBlocks, userAnswers, decryptedQuestions);
+      
+      // In the main verification flow, after verifying all answers:
+      if (isWinner) {
+        console.log(`\n🎉 You're a winner! Checking winner status...`);
+        
+        // Check if winner is already set
+        const quizSetAccount = await this.program.account.quizSet.fetch(new PublicKey(selectedQuizSet.publicKey.toString()));
+        
+        // FIXED: Check if winner exists (not null) instead of using isSome()
+        if (quizSetAccount.winner) {
+            console.log(`✅ Winner already set: ${quizSetAccount.winner.toString()}`);
+            console.log(`✅ Proceeding directly to reward claiming`);
+            
+            // Offer to claim reward
+            const rl = require('readline').createInterface({
+                input: process.stdin,
+                output: process.stdout
+            });
+            
+            const answer = await new Promise<string>((resolve) => {
+                rl.question('   Claim reward? (y/n): ', resolve);
+            });
+            rl.close();
+            
+            if (answer.toLowerCase() === 'y') {
+                const claimed = await this.claimReward(selectedQuizSet.publicKey.toString());
+                if (claimed) {
+                    console.log(`💰 Reward claimed successfully!`);
+                } else {
+                    console.log(`❌ Reward claiming failed. You may need to redeploy the program.`);
+                    console.log(`💡 Run: anchor build && anchor deploy --provider.cluster devnet`);
+                }
+            }
+        } else {
+            console.log(`🎉 Setting winner status for devnet...`);
+            
+            // Set winner status first
+            const winnerSet = await this.setWinnerForDevnet(
+                selectedQuizSet.publicKey.toString(),
+                userAnswers,
+                decryptedQuestions.map(q => q.correctAnswer)
+            );
+            
+            if (winnerSet) {
+                console.log(`✅ Winner status set! Now you can claim your reward.`);
+                
+                // Offer to claim reward
+                const rl = require('readline').createInterface({
+                    input: process.stdin,
+                    output: process.stdout
+                });
+                
+                const answer = await new Promise<string>((resolve) => {
+                    rl.question('   Claim reward? (y/n): ', resolve);
+                });
+                rl.close();
+                
+                if (answer.toLowerCase() === 'y') {
+                    const claimed = await this.claimReward(selectedQuizSet.publicKey.toString());
+                    if (claimed) {
+                        console.log(`💰 Reward claimed successfully!`);
+                    } else {
+                        console.log(`❌ Reward claiming failed. You may need to redeploy the program.`);
+                        console.log(`💡 Run: anchor build && anchor deploy --provider.cluster devnet`);
+                    }
+                }
+            } else {
+                console.log(`❌ Failed to set winner status. Cannot claim reward.`);
+            }
+        }
+      }
       
       // Save results
       const resultInfo = {
@@ -504,6 +691,7 @@ class QuizDecryption {
         userAnswers,
         results,
         score,
+        isWinner,
         timestamp: Date.now()
       };
       
@@ -520,6 +708,12 @@ class QuizDecryption {
       console.log(`   🔓 Questions Decrypted: ${decryptedQuestions.length}`);
       console.log(`   💾 Questions Stored On-Chain: ${decryptedQuestions.length}`);
       console.log(`   🔐 Answers Verified: ${userAnswers.length}`);
+      console.log(`   🎯 Final Score: ${score.toFixed(1)}%`);
+      console.log(`   🏆 Winner: ${isWinner ? 'Yes' : 'No'}`);
+      
+      if (isWinner) {
+        console.log(`   💰 SOL Reward: Available for claim!`);
+      }
       
     } catch (error) {
       console.error("❌ Quiz decryption failed:", error);
@@ -565,10 +759,7 @@ async function main() {
   try {
     const quizDecryption = new QuizDecryption(program, connection, authority);
     
-    // Initialize Arcium first
-    await quizDecryption.initialize();
-    
-    // Then run the quiz
+    // Run the quiz
     await quizDecryption.run();
     
   } catch (error) {

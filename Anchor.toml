@@ -6,16 +6,16 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-k_3_hoot_program_arcium = "BbjmhBTQNnXBqEAFCPmRk5qBpTfdmu8Vb2evMVvAcxCm"
+k_3_hoot_program_arcium = "DWamNnSs9wjxndPrHAqfD747uvynZYyyq45FXu3RKNrP"
 
 [programs.localnet]
-k_3_hoot_program_arcium = "BbjmhBTQNnXBqEAFCPmRk5qBpTfdmu8Vb2evMVvAcxCm"
+k_3_hoot_program_arcium = "DWamNnSs9wjxndPrHAqfD747uvynZYyyq45FXu3RKNrP"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

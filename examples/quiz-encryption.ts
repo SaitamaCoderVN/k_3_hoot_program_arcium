@@ -26,8 +26,8 @@ class SecureQuizEncryptor {
     this.connection = connection;
   }
 
-  // Create quiz set with fixed seeds (temporary)
-  async createQuizSet(name: string, questionCount: number, rewardAmount: number): Promise<string> {
+  // Create quiz set with topic requirement
+  async createQuizSet(topicName: string, name: string, questionCount: number, rewardAmount: number): Promise<string> {
     // Create unique name with timestamp and random string
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 6);
@@ -48,6 +48,12 @@ class SecureQuizEncryptor {
       this.program.programId
     );
 
+    // Get topic PDA
+    const [topicPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("topic"), Buffer.from(topicName)],
+      this.program.programId
+    );
+
     // FIXED: Create vault PDA using the same seeds as program
     const [vaultPda] = PublicKey.findProgramAddressSync(
       [
@@ -58,6 +64,7 @@ class SecureQuizEncryptor {
     );
 
     console.log(`📝 Transaction: Creating quiz set...`);
+    console.log(`   Topic: ${topicName} (${topicPda.toString()})`);
     console.log(`   Account: ${quizSetPda.toString()}`);
     console.log(`   Vault: ${vaultPda.toString()}`);
     console.log(`   Seeds: ["quiz_set", "${this.authority.publicKey.toString()}", ${uniqueId}]`);
@@ -68,6 +75,7 @@ class SecureQuizEncryptor {
         .createQuizSet(uniqueName, questionCount, uniqueId, new BN(rewardAmount * 1_000_000_000)) // Convert SOL to lamports
         .accountsPartial({
           quizSet: quizSetPda,
+          topic: topicPda,
           vault: vaultPda,
           authority: this.authority.publicKey,
           systemProgram: SystemProgram.programId,
@@ -203,6 +211,7 @@ class SecureQuizEncryptor {
 
   // Create complete quiz
   async createCompleteQuiz(
+    topicName: string,
     baseName: string, 
     questions: QuestionData[],
     rewardAmount: number
@@ -219,7 +228,7 @@ class SecureQuizEncryptor {
     // Create new quiz set each time
     console.log(`🚀 Step 1: Creating New Quiz Set`);
     console.log(`─`.repeat(50));
-    const quizSetPda = await this.createQuizSet(baseName, questions.length, rewardAmount);
+    const quizSetPda = await this.createQuizSet(topicName, baseName, questions.length, rewardAmount);
     
     // Add each question
     const questionBlocks = [];
@@ -296,7 +305,8 @@ async function main() {
     console.log();
 
     const { quizSetPda, questionBlocks } = await encryptor.createCompleteQuiz(
-      `Math Quiz`, // Remove timestamp, it will be added automatically
+      "Mathematics", // Topic name
+      "Math Quiz", // Quiz name
       questions,
       0.1 // 0.1 SOL reward
     );

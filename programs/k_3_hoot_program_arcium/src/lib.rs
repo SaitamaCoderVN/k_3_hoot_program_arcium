@@ -108,6 +108,73 @@ pub mod k_3_hoot_program_arcium {
         Ok(())
     }
 
+    // ===== TOPIC MANAGEMENT FUNCTIONS =====
+
+    pub fn create_topic(
+        ctx: Context<CreateTopic>,
+        name: String,
+    ) -> Result<()> {
+        require!(name.len() > 0, QuizError::EmptyName);
+        require!(name.len() <= 100, QuizError::NameTooLong);
+
+        let topic = &mut ctx.accounts.topic;
+        topic.owner = ctx.accounts.owner.key();
+        topic.name = name.clone();
+        topic.created_at = Clock::get()?.unix_timestamp;
+        topic.total_quizzes = 0;
+        topic.total_participants = 0;
+        topic.is_active = true;
+        topic.min_reward_amount = 10_000_000; // 0.01 SOL in lamports
+        topic.min_question_count = 3;
+
+        emit!(TopicCreated {
+            topic: topic.key(),
+            owner: ctx.accounts.owner.key(),
+            name: topic.name.clone(),
+            timestamp: topic.created_at,
+        });
+
+        msg!("Topic '{}' created by {}", topic.name, ctx.accounts.owner.key());
+        Ok(())
+    }
+
+    pub fn transfer_topic_ownership(
+        ctx: Context<TransferTopicOwnership>,
+        new_owner: Pubkey,
+    ) -> Result<()> {
+        let topic = &mut ctx.accounts.topic;
+        let old_owner = topic.owner;
+        
+        topic.owner = new_owner;
+
+        emit!(TopicOwnershipTransferred {
+            topic: topic.key(),
+            old_owner,
+            new_owner,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        msg!("Topic '{}' ownership transferred from {} to {}", topic.name, old_owner, new_owner);
+        Ok(())
+    }
+
+    pub fn toggle_topic_status(
+        ctx: Context<ToggleTopicStatus>,
+        is_active: bool,
+    ) -> Result<()> {
+        let topic = &mut ctx.accounts.topic;
+        topic.is_active = is_active;
+
+        emit!(TopicStatusToggled {
+            topic: topic.key(),
+            is_active,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        msg!("Topic '{}' status changed to: {}", topic.name, if is_active { "Active" } else { "Inactive" });
+        Ok(())
+    }
+
     // ===== QUIZ MANAGEMENT FUNCTIONS =====
 
     pub fn create_quiz_set(
@@ -122,8 +189,17 @@ pub mod k_3_hoot_program_arcium {
         require!(question_count > 0 && question_count <= 50, QuizError::InvalidQuestionCount);
         require!(reward_amount > 0, QuizError::InvalidRewardAmount);
 
+        let topic = &ctx.accounts.topic;
         let quiz_set = &mut ctx.accounts.quiz_set;
+
+        // Validate topic requirements
+        require!(topic.is_active, QuizError::TopicNotActive);
+        require!(topic.owner == ctx.accounts.authority.key(), QuizError::NotTopicOwner);
+        require!(question_count >= topic.min_question_count, QuizError::InsufficientQuestions);
+        require!(reward_amount >= topic.min_reward_amount, QuizError::InsufficientReward);
+
         quiz_set.authority = ctx.accounts.authority.key();
+        quiz_set.topic = topic.key();
         quiz_set.name = name;
         quiz_set.question_count = question_count;
         quiz_set.created_at = Clock::get()?.unix_timestamp;
@@ -132,7 +208,7 @@ pub mod k_3_hoot_program_arcium {
         quiz_set.is_reward_claimed = false;
         quiz_set.winner = None;
         quiz_set.correct_answers_count = 0;
-        quiz_set.unique_id = unique_id;  // Added this line
+        quiz_set.unique_id = unique_id;
 
         // Transfer SOL to vault
         let transfer_ctx = CpiContext::new(
@@ -146,6 +222,7 @@ pub mod k_3_hoot_program_arcium {
 
         emit!(QuizSetCreated {
             quiz_set: quiz_set.key(),
+            topic: quiz_set.topic,
             authority: ctx.accounts.authority.key(),
             name: quiz_set.name.clone(),
             question_count: quiz_set.question_count,
@@ -233,6 +310,77 @@ pub mod k_3_hoot_program_arcium {
         )?;
 
         msg!("Answer validation queued for question {}", question_index);
+        Ok(())
+    }
+
+    // ===== SCORING SYSTEM FUNCTIONS =====
+
+    // Record quiz completion and update scores
+    pub fn record_quiz_completion(
+        ctx: Context<RecordQuizCompletion>,
+        timestamp_seed: u64,
+        is_winner: bool,
+        score: u8,
+        total_questions: u8,
+        reward_amount: u64,
+    ) -> Result<()> {
+        let quiz_set = &ctx.accounts.quiz_set;
+        let topic = &ctx.accounts.topic;
+        let user_score = &mut ctx.accounts.user_score;
+        let quiz_history = &mut ctx.accounts.quiz_history;
+
+        // Initialize user score if first time
+        if user_score.user == Pubkey::default() {
+            user_score.user = ctx.accounts.user.key();
+            user_score.topic = topic.key();
+            user_score.score = 0;
+            user_score.total_completed = 0;
+            user_score.last_activity = 0;
+            user_score.total_rewards = 0;
+        }
+
+        // Update user score
+        user_score.total_completed += 1;
+        user_score.last_activity = Clock::get()?.unix_timestamp;
+        
+        if is_winner {
+            user_score.score += 1;
+            user_score.total_rewards += reward_amount;
+        }
+
+        // Record quiz history
+        quiz_history.user = ctx.accounts.user.key();
+        quiz_history.quiz_set = quiz_set.key();
+        quiz_history.topic = topic.key();
+        quiz_history.completed_at = Clock::get()?.unix_timestamp;
+        quiz_history.score = score;
+        quiz_history.total_questions = total_questions;
+        quiz_history.is_winner = is_winner;
+        quiz_history.reward_claimed = if is_winner { reward_amount } else { 0 };
+
+        emit!(QuizCompletionRecorded {
+            user: ctx.accounts.user.key(),
+            quiz_set: quiz_set.key(),
+            topic: topic.key(),
+            is_winner,
+            score,
+            total_questions,
+            reward_amount: if is_winner { reward_amount } else { 0 },
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        msg!("Quiz completion recorded for user {} - Score: {}/{} - Winner: {}", 
+             ctx.accounts.user.key(), score, total_questions, is_winner);
+        Ok(())
+    }
+
+    // Get user's overall stats across all topics
+    pub fn get_user_global_stats(
+        ctx: Context<GetUserGlobalStats>,
+    ) -> Result<()> {
+        // This function is mainly for anchor IDL generation
+        // The actual stats fetching will be done client-side by fetching all UserScore accounts
+        msg!("User global stats request for: {}", ctx.accounts.user.key());
         Ok(())
     }
 
@@ -449,6 +597,60 @@ pub mod k_3_hoot_program_arcium {
 
 // ===== ACCOUNT STRUCTURES =====
 
+// ===== TOPIC MANAGEMENT ACCOUNTS =====
+
+#[derive(Accounts)]
+#[instruction(name: String)]
+pub struct CreateTopic<'info> {
+    #[account(
+        init,
+        payer = owner,
+        space = Topic::LEN,
+        seeds = [b"topic", name.as_bytes()],
+        bump
+    )]
+    pub topic: Account<'info, Topic>,
+    
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct TransferTopicOwnership<'info> {
+    #[account(
+        mut,
+        seeds = [b"topic", topic.name.as_bytes()],
+        bump,
+        has_one = owner @ QuizError::NotTopicOwner
+    )]
+    pub topic: Account<'info, Topic>,
+    
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ToggleTopicStatus<'info> {
+    #[account(
+        mut,
+        seeds = [b"topic", topic.name.as_bytes()],
+        bump,
+        has_one = owner @ QuizError::NotTopicOwner
+    )]
+    pub topic: Account<'info, Topic>,
+    
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+// ===== QUIZ MANAGEMENT ACCOUNTS =====
+
 #[derive(Accounts)]
 #[instruction(name: String, question_count: u8, unique_id: u8, reward_amount: u64)]
 pub struct CreateQuizSet<'info> {
@@ -460,6 +662,14 @@ pub struct CreateQuizSet<'info> {
         bump
     )]
     pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(
+        seeds = [b"topic", topic.name.as_bytes()],
+        bump,
+        constraint = topic.is_active @ QuizError::TopicNotActive,
+        constraint = topic.owner == authority.key() @ QuizError::NotTopicOwner
+    )]
+    pub topic: Account<'info, Topic>,
     
     #[account(
         init,
@@ -500,6 +710,58 @@ pub struct AddEncryptedQuestionBlock<'info> {
     pub authority: Signer<'info>,
     
     pub system_program: Program<'info, System>,
+}
+
+// ===== SCORING SYSTEM ACCOUNTS =====
+
+#[derive(Accounts)]
+#[instruction(timestamp_seed: u64)]
+pub struct RecordQuizCompletion<'info> {
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = UserScore::LEN,
+        seeds = [b"user_score", user.key().as_ref(), topic.key().as_ref()],
+        bump
+    )]
+    pub user_score: Account<'info, UserScore>,
+    
+    #[account(
+        init,
+        payer = user,
+        space = QuizHistory::LEN,
+        seeds = [
+            b"quiz_history", 
+            user.key().as_ref(), 
+            quiz_set.key().as_ref(),
+            &timestamp_seed.to_le_bytes()
+        ],
+        bump
+    )]
+    pub quiz_history: Account<'info, QuizHistory>,
+    
+    #[account(
+        seeds = [b"quiz_set", quiz_set.authority.as_ref(), &[quiz_set.unique_id]],
+        bump
+    )]
+    pub quiz_set: Account<'info, QuizSet>,
+    
+    #[account(
+        seeds = [b"topic", topic.name.as_bytes()],
+        bump
+    )]
+    pub topic: Account<'info, Topic>,
+    
+    #[account(mut)]
+    pub user: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct GetUserGlobalStats<'info> {
+    /// CHECK: This is just for IDL generation, no constraints needed
+    pub user: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -851,8 +1113,55 @@ pub struct ClaimReward<'info> {
 // ===== DATA STRUCTURES =====
 
 #[account]
+pub struct Topic {
+    pub owner: Pubkey,                // Topic creator
+    pub name: String,                 // Topic name (unique)
+    pub created_at: i64,              // Creation timestamp
+    pub total_quizzes: u32,           // Total quizzes in this topic
+    pub total_participants: u32,      // Total unique participants
+    pub is_active: bool,              // Whether topic is active
+    pub min_reward_amount: u64,       // Minimum reward for valid quiz (0.01 SOL = 10M lamports)
+    pub min_question_count: u8,       // Minimum questions for valid quiz (3)
+}
+
+impl Topic {
+    pub const LEN: usize = 8 + 32 + 4 + 100 + 8 + 4 + 4 + 1 + 8 + 1; // ~170 bytes
+}
+
+#[account]
+pub struct UserScore {
+    pub user: Pubkey,                 // User's public key
+    pub topic: Pubkey,                // Topic public key
+    pub score: u32,                   // Number of quizzes won
+    pub total_completed: u32,         // Total quizzes completed (win + lose)
+    pub last_activity: i64,           // Last quiz completion time
+    pub total_rewards: u64,           // Total SOL rewards earned
+}
+
+impl UserScore {
+    pub const LEN: usize = 8 + 32 + 32 + 4 + 4 + 8 + 8; // ~96 bytes
+}
+
+#[account]
+pub struct QuizHistory {
+    pub user: Pubkey,                 // User who completed
+    pub quiz_set: Pubkey,             // Quiz set completed
+    pub topic: Pubkey,                // Topic of the quiz
+    pub completed_at: i64,            // Completion timestamp
+    pub score: u8,                    // Questions answered correctly
+    pub total_questions: u8,          // Total questions in quiz
+    pub is_winner: bool,              // Whether user won (100% correct)
+    pub reward_claimed: u64,          // Reward amount claimed (0 if lost)
+}
+
+impl QuizHistory {
+    pub const LEN: usize = 8 + 32 + 32 + 32 + 8 + 1 + 1 + 1 + 8; // ~123 bytes
+}
+
+#[account]
 pub struct QuizSet {
     pub authority: Pubkey,
+    pub topic: Pubkey,                // Associated topic
     pub name: String,
     pub question_count: u8,
     pub created_at: i64,
@@ -861,11 +1170,11 @@ pub struct QuizSet {
     pub is_reward_claimed: bool,      // Whether reward has been claimed
     pub winner: Option<Pubkey>,       // Winner's public key
     pub correct_answers_count: u8,    // Count of correct answers
-    pub unique_id: u8,  // Thêm field này
+    pub unique_id: u8,                // Unique ID for PDA
 }
 
 impl QuizSet {
-    pub const LEN: usize = 8 + 32 + 4 + 100 + 1 + 8 + 1 + 8 + 1 + 33 + 1 + 1; // +1 cho unique_id
+    pub const LEN: usize = 8 + 32 + 32 + 4 + 100 + 1 + 8 + 1 + 8 + 1 + 33 + 1 + 1; // +32 for topic
 }
 
 #[account]
@@ -885,9 +1194,37 @@ impl QuestionBlock {
 
 // ===== EVENTS =====
 
+// ===== TOPIC EVENTS =====
+
+#[event]
+pub struct TopicCreated {
+    pub topic: Pubkey,
+    pub owner: Pubkey,
+    pub name: String,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct TopicOwnershipTransferred {
+    pub topic: Pubkey,
+    pub old_owner: Pubkey,
+    pub new_owner: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct TopicStatusToggled {
+    pub topic: Pubkey,
+    pub is_active: bool,
+    pub timestamp: i64,
+}
+
+// ===== QUIZ EVENTS =====
+
 #[event]
 pub struct QuizSetCreated {
     pub quiz_set: Pubkey,
+    pub topic: Pubkey,
     pub authority: Pubkey,
     pub name: String,
     pub question_count: u8,
@@ -938,6 +1275,20 @@ pub struct RewardClaimed {
     pub timestamp: i64,
 }
 
+// ===== SCORING EVENTS =====
+
+#[event]
+pub struct QuizCompletionRecorded {
+    pub user: Pubkey,
+    pub quiz_set: Pubkey,
+    pub topic: Pubkey,
+    pub is_winner: bool,
+    pub score: u8,
+    pub total_questions: u8,
+    pub reward_amount: u64,
+    pub timestamp: i64,
+}
+
 // ===== ERROR CODES =====
 
 #[error_code]
@@ -970,6 +1321,14 @@ pub enum QuizError {
     InvalidAnswerCount,
     #[msg("Insufficient vault balance")]
     InsufficientVaultBalance,
+    #[msg("Topic not active")]
+    TopicNotActive,
+    #[msg("Not the topic owner")]
+    NotTopicOwner,
+    #[msg("Insufficient questions for this topic")]
+    InsufficientQuestions,
+    #[msg("Insufficient reward amount for this topic")]
+    InsufficientReward,
 }
 
 #[error_code]

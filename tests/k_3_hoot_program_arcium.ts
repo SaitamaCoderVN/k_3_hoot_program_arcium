@@ -41,7 +41,7 @@ describe("k_3_hoot_program_arcium", () => {
     it("Should create a quiz set", async () => {
       try {
         await program.methods
-          .createQuizSet("Math Quiz", 3, 1) // Add uniqueId as third parameter
+          .createQuizSet("Math Quiz", 3, 1, new BN(1)) // Add uniqueId as third parameter
           .accountsPartial({
             quizSet: quizSetPda,
             authority: authority.publicKey,

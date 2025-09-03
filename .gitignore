@@ -11,3 +11,4 @@ encrypted-ixs/src/main.rs
 artifacts/
 .env
 .env.local
+.cursor/

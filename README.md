@@ -38,10 +38,11 @@ A secure quiz application built on Solana using the Arcium framework for encrypt
 ## 🛠️ Setup & Installation
 
 ### Prerequisites
-- Rust 1.70+
-- Solana CLI 1.16+
-- Node.js 18+
+- Rust
+- Solana
+- Node.js
 - Anchor CLI
+- Arcium
 
 ### Installation
 ```bash
@@ -103,38 +104,6 @@ npx ts-node examples/quiz-encryption.ts
 ### Solana Accounts
 - **QuizSet**: Stores quiz metadata and configuration
 - **QuestionBlock**: Stores encrypted question data and Arcium pubkeys
-
-## 🚀 Deployment
-
-### Devnet
-```bash
-# Deploy to devnet
-anchor deploy --provider.cluster devnet
-
-# Initialize computation definitions
-anchor run init-computation-definitions
-```
-
-### Mainnet
-```bash
-# Deploy to mainnet
-anchor deploy --provider.cluster mainnet-beta
-```
-
-## 🔍 Testing
-
-```bash
-# Run all tests
-anchor test
-
-# Test specific functionality
-anchor test --skip-lint
-
-# Run with specific cluster
-anchor test --provider.cluster devnet
-```
-
-## 📖 API Reference
 
 ### Core Functions
 - `createQuizSet(name, questionCount, uniqueId)`: Create new quiz set

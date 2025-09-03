@@ -54,10 +54,10 @@ cd k_3_hoot_program_arcium
 yarn install
 
 # Build program
-anchor build
+arcium build
 
 # Run tests
-anchor test
+arcium test
 ```
 
 ## 📚 Usage Examples
@@ -81,9 +81,6 @@ const { quizSetPda } = await encryptor.createCompleteQuiz("Math Quiz", questions
 
 ### Testing Encryption
 ```bash
-# Test encryption/decryption logic
-npx ts-node examples/quiz-encryption-test.ts
-
 # Run full quiz creation
 npx ts-node examples/quiz-encryption.ts
 ```

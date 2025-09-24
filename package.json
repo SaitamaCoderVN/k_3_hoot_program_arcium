@@ -9,7 +9,7 @@
     "test": "anchor test"
   },
   "dependencies": {
-    "@arcium-hq/client": "0.2.0",
+    "@arcium-hq/client": "0.3.0",
     "@coral-xyz/anchor": "^0.31.1",
     "bn.js": "^5.2.2",
     "dotenv": "^17.2.1"

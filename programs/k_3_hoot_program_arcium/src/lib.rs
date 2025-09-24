@@ -7,7 +7,7 @@ const COMP_DEF_OFFSET_VALIDATE_ANSWER: u32 = comp_def_offset("validate_answer");
 const COMP_DEF_OFFSET_DECRYPT_QUIZ: u32 = comp_def_offset("decrypt_quiz");
 const COMP_DEF_OFFSET_ENCRYPT_QUIZ: u32 = comp_def_offset("encrypt_quiz");
 
-declare_id!("DWamNnSs9wjxndPrHAqfD747uvynZYyyq45FXu3RKNrP");
+declare_id!("4K3zoVTLgNxm7eyNkHhQQUvQgoq5T4wTmrnkH7nZ6XJa");
 
 #[arcium_program]
 pub mod k_3_hoot_program_arcium {
@@ -40,6 +40,7 @@ pub mod k_3_hoot_program_arcium {
         _correct_answer: String,
         nonce: u128,
     ) -> Result<()> {
+        ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
         // Combine question + options into single data block
         let mut combined_data = [0u8; 64]; // Changed to 64 bytes
         let question_bytes = question_text.as_bytes();
@@ -69,12 +70,14 @@ pub mod k_3_hoot_program_arcium {
         queue_computation(
             ctx.accounts, 
             computation_offset, 
-            args, 
-            vec![CallbackAccount {
-                pubkey: ctx.accounts.question_block.key(),
-                is_writable: true,
-            }], 
-            None
+            args,
+            None,
+            vec![ EncryptQuizCallback::callback_ix (&[
+                CallbackAccount {
+                    pubkey: ctx.accounts.question_block.key(),
+                    is_writable: true,
+                },
+            ])], 
         )?;
 
         msg!("Quiz data encryption queued");
@@ -87,6 +90,7 @@ pub mod k_3_hoot_program_arcium {
         encrypted_data: [u8; 64],
         nonce: u128,
     ) -> Result<()> {
+        ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
         // FIXED: Send data as individual bytes
         let mut args = vec![Argument::PlaintextU128(nonce)];
         for i in 0..64 {
@@ -96,12 +100,14 @@ pub mod k_3_hoot_program_arcium {
         queue_computation(
             ctx.accounts, 
             computation_offset, 
-            args, 
-            vec![CallbackAccount {
-                pubkey: ctx.accounts.question_block.key(),
-                is_writable: true,
-            }], 
-            None
+            args,
+            None, 
+            vec![DecryptQuizCallback::callback_ix (&[
+                CallbackAccount {
+                    pubkey: ctx.accounts.question_block.key(),
+                    is_writable: true,
+                },
+            ])], 
         )?;
 
         msg!("Quiz data decryption queued");
@@ -277,6 +283,7 @@ pub mod k_3_hoot_program_arcium {
         user_answer: String,
         question_index: u8,
     ) -> Result<()> {
+        ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
         let question_block = &ctx.accounts.question_block;
         let quiz_set = &ctx.accounts.quiz_set;
         
@@ -304,9 +311,9 @@ pub mod k_3_hoot_program_arcium {
         queue_computation(
             ctx.accounts, 
             computation_offset, 
-            args, 
-            vec![], 
-            None
+            args,
+            None,
+            vec![ValidateAnswerCallback::callback_ix(&[])], 
         )?;
 
         msg!("Answer validation queued for question {}", question_index);
@@ -318,7 +325,6 @@ pub mod k_3_hoot_program_arcium {
     // Record quiz completion and update scores
     pub fn record_quiz_completion(
         ctx: Context<RecordQuizCompletion>,
-        timestamp_seed: u64,
         is_winner: bool,
         score: u8,
         total_questions: u8,
@@ -799,6 +805,16 @@ pub struct SetWinnerForUser<'info> {
 pub struct ValidateAnswerOnchain<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+
+    #[account(
+        init_if_needed,
+        space = 9,
+        payer = payer,
+        seeds = [&SIGN_PDA_SEED],
+        bump,
+        address = derive_sign_pda!(),
+    )]
+    pub sign_pda_account: Account<'info, SignerAccount>,
     
     pub question_block: Account<'info, QuestionBlock>,
     pub quiz_set: Account<'info, QuizSet>,
@@ -855,16 +871,19 @@ pub struct ValidateAnswerOnchain<'info> {
     pub arcium_program: Program<'info, Arcium>,
 }
 
-#[callback_accounts("validate_answer", payer)]
+#[callback_accounts("validate_answer")]
 #[derive(Accounts)]
 pub struct ValidateAnswerCallback<'info> {
+
     #[account(mut)]
     pub payer: Signer<'info>,
+
     pub arcium_program: Program<'info, Arcium>,
     #[account(
         address = derive_comp_def_pda!(COMP_DEF_OFFSET_VALIDATE_ANSWER)
     )]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+
     #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
     /// CHECK: instructions_sysvar, checked by the account constraint
     pub instructions_sysvar: AccountInfo<'info>,
@@ -873,32 +892,32 @@ pub struct ValidateAnswerCallback<'info> {
     pub quiz_set: Account<'info, QuizSet>,
 }
 
-#[callback_accounts("encrypt_quiz", payer)]
+#[callback_accounts("encrypt_quiz")]
 #[derive(Accounts)]
 pub struct EncryptQuizCallback<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
+    
     pub arcium_program: Program<'info, Arcium>,
     #[account(
         address = derive_comp_def_pda!(COMP_DEF_OFFSET_ENCRYPT_QUIZ)
     )]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+
     #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
     /// CHECK: instructions_sysvar, checked by the account constraint
     pub instructions_sysvar: AccountInfo<'info>,
     pub question_block: Account<'info, QuestionBlock>,
 }
 
-#[callback_accounts("decrypt_quiz", payer)]
+#[callback_accounts("decrypt_quiz")]
 #[derive(Accounts)]
 pub struct DecryptQuizCallback<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
+    
     pub arcium_program: Program<'info, Arcium>,
     #[account(
         address = derive_comp_def_pda!(COMP_DEF_OFFSET_DECRYPT_QUIZ)
     )]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
+    
     #[account(address = ::anchor_lang::solana_program::sysvar::instructions::ID)]
     /// CHECK: instructions_sysvar, checked by the account constraint
     pub instructions_sysvar: AccountInfo<'info>,
@@ -911,6 +930,16 @@ pub struct DecryptQuizCallback<'info> {
 pub struct EncryptQuizData<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+
+    #[account(
+        init_if_needed,
+        space = 9,
+        payer = payer,
+        seeds = [&SIGN_PDA_SEED],
+        bump,
+        address = derive_sign_pda!(),
+    )]
+    pub sign_pda_account: Account<'info, SignerAccount>,
     
     pub question_block: Account<'info, QuestionBlock>,
     
@@ -972,6 +1001,16 @@ pub struct EncryptQuizData<'info> {
 pub struct DecryptQuizData<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+
+    #[account(
+        init_if_needed,
+        space = 9,
+        payer = payer,
+        seeds = [&SIGN_PDA_SEED],
+        bump,
+        address = derive_sign_pda!(),
+    )]
+    pub sign_pda_account: Account<'info, SignerAccount>,
     
     pub question_block: Account<'info, QuestionBlock>,
     

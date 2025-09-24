@@ -5,4 +5,7 @@ edition = "2021"
 
 [dependencies]
 base64ct = "1.7.0"
-arcis-imports = "0.2.0"
+arcis-imports = "0.3.0"
+
+[patch.crates-io]
+proc-macro2 = { git = 'https://github.com/arcium-hq/proc-macro2.git' }

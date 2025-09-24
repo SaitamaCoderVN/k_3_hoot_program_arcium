@@ -25,9 +25,12 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 
+[patch.crates-io]
+proc-macro2 = { git = 'https://github.com/arcium-hq/proc-macro2.git' }
+
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 
-arcium-client = { default-features = false, version = "0.2.0" }
-arcium-macros = "0.2.0"
-arcium-anchor = "0.2.0"
+arcium-client = { default-features = false, version = "0.3.0" }
+arcium-macros = "0.3.0"
+arcium-anchor = "0.3.0"

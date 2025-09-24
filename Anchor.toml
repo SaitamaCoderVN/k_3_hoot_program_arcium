@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-k_3_hoot_program_arcium = "DWamNnSs9wjxndPrHAqfD747uvynZYyyq45FXu3RKNrP"
+k_3_hoot_program_arcium = "4K3zoVTLgNxm7eyNkHhQQUvQgoq5T4wTmrnkH7nZ6XJa"
 
 [programs.localnet]
-k_3_hoot_program_arcium = "DWamNnSs9wjxndPrHAqfD747uvynZYyyq45FXu3RKNrP"
+k_3_hoot_program_arcium = "4K3zoVTLgNxm7eyNkHhQQUvQgoq5T4wTmrnkH7nZ6XJa"
 
 [registry]
 url = "https://api.apr.dev"
